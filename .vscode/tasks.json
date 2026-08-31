@@ -3,60 +3,16 @@
   "tasks": [
     {
       "label": "Serve API",
-      "detail": "uvicorn on :8000 with reload; the store starts empty — run \"Ingest sample into API\" next",
       "type": "shell",
       "command": "uv run uvicorn riskview.main:app --reload --port 8000",
       "isBackground": true,
-      "problemMatcher": [],
-      "presentation": { "reveal": "always", "panel": "dedicated" }
-    },
-    {
-      "label": "Ingest sample into API",
-      "detail": "POST samples/cashflows.csv to a running server",
-      "type": "shell",
-      "command": "curl -sS -F file=@samples/cashflows.csv http://localhost:8000/ingest",
-      "problemMatcher": [],
-      "presentation": { "reveal": "always", "panel": "shared", "clear": true }
+      "problemMatcher": []
     },
     {
       "label": "Sample report",
-      "detail": "Validate samples/cashflows.csv and print IRRs + NAV schedules for every fund",
       "type": "shell",
       "command": "uv run python scripts/fund_report.py --data samples/cashflows.csv",
-      "problemMatcher": [],
-      "presentation": { "reveal": "always", "panel": "shared", "clear": true }
-    },
-    {
-      "label": "Sample report: choose fund",
-      "detail": "Same report, filtered to one fund and optionally one currency",
-      "type": "shell",
-      "command": "uv run python scripts/fund_report.py --data samples/cashflows.csv --fund '${input:fund}' --currency '${input:currency}'",
-      "problemMatcher": [],
-      "presentation": { "reveal": "always", "panel": "shared", "clear": true }
-    },
-    {
-      "label": "Tests",
-      "type": "shell",
-      "command": "uv run pytest",
-      "group": { "kind": "test", "isDefault": true },
-      "problemMatcher": [],
-      "presentation": { "reveal": "always", "panel": "shared", "clear": true }
-    }
-  ],
-  "inputs": [
-    {
-      "id": "fund",
-      "type": "pickString",
-      "description": "Fund to report",
-      "options": ["Fund I", "Fund II"],
-      "default": "Fund I"
-    },
-    {
-      "id": "currency",
-      "type": "pickString",
-      "description": "Currency filter (blank = all)",
-      "options": ["", "EUR", "GBP", "USD"],
-      "default": ""
+      "problemMatcher": []
     }
   ]
 }
