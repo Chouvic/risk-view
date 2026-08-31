@@ -52,7 +52,9 @@ The UI reads the same routes: it shows the version each fund is on, lets you pin
 The UI proxies `/api` to the backend, so start the API first and open <http://localhost:5173>.
 
 In VS Code these are tasks (⇧⌘P → *Run Task*): **Serve API**, **Serve UI**, **Serve API + UI** and
-**Sample report**.
+**Sample report**. Each serve task first frees its port, so a server left behind by an earlier run
+cannot fail the next one with `Address already in use` — `scripts/free-port.sh PORT` on macOS and
+Linux, `scripts\free-port.cmd PORT` on Windows, both a no-op when the port is already free.
 
 ## Web UI
 
