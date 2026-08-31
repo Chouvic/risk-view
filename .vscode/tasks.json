@@ -33,7 +33,9 @@
       "label": "Free API port",
       "type": "shell",
       "command": "./scripts/free-port.sh 8000",
-      "windows": { "command": "scripts\\free-port.cmd 8000" },
+      "windows": {
+        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\free-port.ps1 8000"
+      },
       "presentation": { "reveal": "silent", "panel": "shared", "close": true },
       "problemMatcher": []
     },
@@ -41,7 +43,9 @@
       "label": "Free UI port",
       "type": "shell",
       "command": "./scripts/free-port.sh 5173",
-      "windows": { "command": "scripts\\free-port.cmd 5173" },
+      "windows": {
+        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\free-port.ps1 5173"
+      },
       "presentation": { "reveal": "silent", "panel": "shared", "close": true },
       "problemMatcher": []
     }

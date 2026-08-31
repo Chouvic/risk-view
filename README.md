@@ -54,7 +54,10 @@ The UI proxies `/api` to the backend, so start the API first and open <http://lo
 In VS Code these are tasks (⇧⌘P → *Run Task*): **Serve API**, **Serve UI**, **Serve API + UI** and
 **Sample report**. Each serve task first frees its port, so a server left behind by an earlier run
 cannot fail the next one with `Address already in use` — `scripts/free-port.sh PORT` on macOS and
-Linux, `scripts\free-port.cmd PORT` on Windows, both a no-op when the port is already free.
+Linux, `scripts\free-port.ps1 PORT` on Windows, both a no-op when the port is already free. They
+match the port in any connection state, not just `LISTEN`: a `--reload` server whose app failed to
+start leaves the socket bound but closed, which blocks the next run just the same. Only sockets
+whose *local* address is the port are killed, so a browser or the UI's `/api` proxy is left alone.
 
 ## Web UI
 
