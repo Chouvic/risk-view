@@ -25,6 +25,8 @@ uv run uvicorn riskview.main:app   # optional: serve the analytics as an API on 
 
 The report script reads `samples/cashflows.csv` by default (see [Data](#data)) and takes `--data path/to/file.csv|.xlsx`, `--fund NAME` and `--currency CCY`. The API starts with an empty store, so post a file first: `curl -F file=@samples/cashflows.csv localhost:8000/ingest`. It then serves `/funds`, `/funds/{id}/irr`, `/funds/{id}/nav`, `/funds/{id}/hedges`; interactive docs at `/docs`.
 
+In VS Code the same commands are tasks (⇧⌘P → *Run Task*): **Serve API**, **Ingest sample into API**, **Sample report**, **Sample report: choose fund**, **Tests**.
+
 ## Approach
 
 Three layers behind shared Pydantic schemas; the pipeline from the design doc is the package layout:
