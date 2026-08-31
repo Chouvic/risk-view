@@ -17,3 +17,6 @@ build/
 
 data/
 .scratch/
+
+# Local build tooling for the report dataset, not part of the deliverable
+scripts/build_report_data.py

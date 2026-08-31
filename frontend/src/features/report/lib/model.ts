@@ -1,7 +1,7 @@
 /**
  * Views over the generated dataset. The report is static, but nothing in it is typed
- * by hand: every figure below is read out of `data.ts`, which `scripts/build_report_data.py`
- * produces by running `samples/cashflows.csv` through the real pipeline.
+ * by hand: every figure below is read out of `data.ts`, which is produced by running
+ * `samples/cashflows.csv` through the real pipeline.
  */
 
 import { REPORT_DATA } from "../data";

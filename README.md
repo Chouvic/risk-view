@@ -51,15 +51,9 @@ the valuation date through the NAV schedule, and replay a mid-quarter revision a
 book.
 
 The page is static: it reads a dataset generated from the real pipeline instead of calling the API,
-so it presents identically with the backend down. Nothing on it is typed by hand — regenerate after
-any change to the analytics or the sample data:
-
-```bash
-uv run python scripts/build_report_data.py
-```
-
-On load the page re-derives every IRR and NAV point in the browser and compares them against the
-Python output; a stale dataset shows as a failed check rather than a quietly wrong number.
+so it presents identically with the backend down. Nothing on it is typed by hand. On load it
+re-solves every IRR and re-discounts every NAV point in the browser and compares them against the
+generated output, so a stale dataset shows as a failed check rather than a quietly wrong number.
 
 Metric names carry a dotted underline: hovering one gives the definition and the convention behind
 it, from `src/lib/glossary.ts`. Tables sort on any column. A currency keeps its colour throughout, so
