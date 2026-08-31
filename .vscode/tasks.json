@@ -9,6 +9,19 @@
       "problemMatcher": []
     },
     {
+      "label": "Serve UI",
+      "type": "shell",
+      "command": "npm run dev --prefix frontend",
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "Serve API + UI",
+      "dependsOn": ["Serve API", "Serve UI"],
+      "dependsOrder": "parallel",
+      "problemMatcher": []
+    },
+    {
       "label": "Sample report",
       "type": "shell",
       "command": "uv run python scripts/fund_report.py --data samples/cashflows.csv",

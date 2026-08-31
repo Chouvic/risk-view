@@ -20,12 +20,38 @@ Requires Python ≥ 3.12 and [uv](https://docs.astral.sh/uv/).
 uv sync                       # install
 uv run pytest                 # run the test suite
 uv run python scripts/fund_report.py            # validate a cashflow file, print IRRs + NAV schedules
-uv run uvicorn riskview.main:app   # optional: serve the analytics as an API on :8000
+uv run uvicorn riskview.main:app   # serve the analytics as an API on :8000
+
+cd frontend && npm install && npm run dev   # the web UI on :5173
 ```
 
-The report script reads `samples/cashflows.csv` by default (see [Data](#data)) and takes `--data path/to/file.csv|.xlsx`, `--fund NAME` and `--currency CCY`. The API starts with an empty store, so post a file first: `curl -F file=@samples/cashflows.csv localhost:8000/ingest`. It then serves `/funds`, `/funds/{id}/irr`, `/funds/{id}/nav`, `/funds/{id}/hedges`; interactive docs at `/docs`.
+The report script reads `samples/cashflows.csv` by default (see [Data](#data)) and takes `--data path/to/file.csv|.xlsx`, `--fund NAME` and `--currency CCY`. The API starts with an empty store, so post a file first: `curl -F file=@samples/cashflows.csv localhost:8000/ingest`. It then serves `/funds`, `/funds/{id}/irr`, `/funds/{id}/nav`, `/funds/{id}/hedges`; interactive docs at `/docs`. `/funds` also returns `source_file`, the file each fund's projections were ingested from.
 
-In VS Code both are tasks (⇧⌘P → *Run Task*): **Serve API** and **Sample report**.
+The UI proxies `/api` to the backend, so start the API first and open <http://localhost:5173>.
+
+In VS Code these are tasks (⇧⌘P → *Run Task*): **Serve API**, **Serve UI**, **Serve API + UI** and
+**Sample report**.
+
+## Web UI
+
+`frontend/` is a React + TypeScript app (Vite, Tailwind, Recharts) over the same API. Three routes,
+each with its own URL: `/funds` lists the funds, `/funds/:id` is one fund top to bottom — overview,
+returns, NAV and hedges, scoped by a currency filter — and `/data` handles ingestion, since a file
+can carry several funds and a fund only names the file it came from.
+
+Metric names carry a dotted underline: hovering one gives the definition and the convention behind
+it, from `src/lib/glossary.ts`. Tables sort on any column. A currency keeps its colour throughout, so
+filtering never repaints a series.
+
+```
+frontend/src/
+├── api/          # the only place that talks HTTP: client + TypeScript mirrors of the schemas
+├── pages/        # one per route
+├── features/     # the pieces those pages are built from
+├── components/   # ui/ primitives and charts/ wrappers
+├── hooks/        # data loading
+└── lib/          # formatting, colours, axis ticks, sorting, the glossary
+```
 
 ## Approach
 
