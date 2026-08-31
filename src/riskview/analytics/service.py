@@ -1,8 +1,4 @@
-"""Composes the analytics for one fund from its validated cashflows.
-
-Pure function of the cashflow set — no I/O, no state — so results are
-deterministic and recomputation is always safe.
-"""
+"""Composes one fund's analytics from its validated cashflows: a pure function, so recomputation is safe."""
 
 from collections import defaultdict
 

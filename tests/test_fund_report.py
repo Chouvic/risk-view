@@ -14,7 +14,7 @@ def _run(*args: str, check: bool = True) -> subprocess.CompletedProcess:
 def test_single_fund_report_covers_the_part3_requirements(sample_csv_path):
     out = _run("--data", str(sample_csv_path), "--fund", "Fund I").stdout
 
-    assert "Ingestion: 126 accepted, 3 corrected, 0 rejected" in out
+    assert "Ingestion: 126 accepted, 3 corrected" in out
     assert "Fund I — base currency EUR" in out
     assert "Fund II" not in out
     assert "Fund-level IRR" in out
@@ -40,3 +40,21 @@ def test_unknown_fund_fails_with_available_names():
     run = _run("--fund", "Nope", check=False)
     assert run.returncode != 0
     assert "Fund I, Fund II" in run.stderr
+
+
+def test_rejected_rows_fail_the_run_and_name_every_bad_line(tmp_path):
+    header = (
+        "ID,Fund Name,Date,Cashflow Type,Local Currency,"
+        "Cashflow Amount Local,Cashflow Amount Base,Base Currency"
+    )
+    bad = tmp_path / "bad.csv"
+    bad.write_text(
+        f"{header}\n"
+        "1,Fund I,30/09/2025 00:00,Investment,GBP,-100,-114,EUR\n"
+        "2,Fund I,bad-date,Interest,GBP,10,11,EUR\n"
+    )
+    run = _run("--data", str(bad), check=False)
+    assert run.returncode != 0
+    assert "nothing was ingested" in run.stderr
+    assert "line 3 (id 2)" in run.stderr
+    assert run.stdout == ""

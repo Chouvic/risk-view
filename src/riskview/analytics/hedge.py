@@ -1,9 +1,6 @@
 """FX hedge recommendation: 3-month rolling forwards at 100% of NAV.
 
-At each schedule date the fund sells forward its open local-currency exposure
-against the base currency, maturing at the next quarterly roll. The base-currency
-position needs no hedge, and no trade is generated once the exposure is zero
-(i.e. at and after the final cashflow date).
+The base-currency position needs no hedge, and no trade is generated once exposure is zero.
 """
 
 import calendar

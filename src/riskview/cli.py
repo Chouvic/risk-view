@@ -19,7 +19,7 @@ from riskview.db.alembic_support import schema_is_current
 from riskview.db.repository import CashflowRepository
 from riskview.db.session import create_db_engine, create_session_factory, session_scope
 from riskview.ingestion.readers import UnsupportedFormatError
-from riskview.ingestion.service import ingest_into
+from riskview.ingestion.service import IngestionRejected, ingest_into
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -50,6 +50,10 @@ def main(argv: list[str] | None = None) -> int:
             report = ingest_into(
                 CashflowRepository(session), args.path.read_bytes(), args.path.name
             )
+    except IngestionRejected as exc:
+        for row in exc.rejects:
+            print(f"  line {row.line} (id {row.row_id}): {'; '.join(row.errors)}", file=sys.stderr)
+        return _fail(str(exc))
     except (UnsupportedFormatError, ValueError) as exc:
         return _fail(str(exc))
     finally:
@@ -60,12 +64,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"Batch {report.batch_id}: ", end="")
     summary = report.summary
-    print(
-        f"{summary['accepted']} accepted, {summary['corrected']} corrected, "
-        f"{summary['rejected']} rejected"
-    )
-    for row in report.rejects:
-        print(f"  rejected line {row.line} (id {row.row_id}): {'; '.join(row.errors)}")
+    print(f"{summary['accepted']} accepted, {summary['corrected']} corrected")
     return 0
 
 

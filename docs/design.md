@@ -21,7 +21,7 @@ The input entity — the only one clients supply; everything else is derived fro
 | amount_base | decimal | client-supplied conversion to the fund's base currency |
 | base_currency | ISO 4217 | the fund's reporting currency |
 
-Amounts are exact decimals at rest; analytics use floats for root-finding and round results back to cents. The natural key is (fund, currency, date, type), enforced as a unique constraint within a projection version; a file carrying two rows for one key is rejected with a reason rather than silently keeping one of them.
+Amounts are exact decimals at rest; analytics use floats for root-finding and round results back to cents. The natural key for upserts is (fund, currency, date, type).
 
 ### NAV schedule
 
@@ -32,10 +32,17 @@ Derived — one schedule per (fund, currency) in local-currency terms, plus one 
 | fund_name | str | |
 | currency | ISO 4217 | position currency (base currency for the fund-level schedule) |
 | irr | float | the position's IRR, which is also the discount rate for every point |
-| points | | one per cashflow date, each holding: |
-| · date | date | |
-| · nav | decimal | PV of flows on or after the date, at the IRR; by construction NAV(0) = 0 and NAV at the final date equals the terminal value — the schedule's built-in sanity checks |
-| · open_exposure | decimal | PV of flows after the date — the amount a hedge must cover |
+| points | NAV point[] | one per cashflow date, chronological |
+
+Each **NAV point**:
+
+| Field | Type | Notes |
+|---|---|---|
+| date | date | a cashflow date for this position |
+| nav | decimal | PV of flows on or after the date, at the IRR |
+| open_exposure | decimal | PV of flows strictly after the date — the amount a hedge must cover |
+
+By construction NAV(0) = 0 and NAV at the final date equals the terminal value: the brief's two sanity checks, asserted in `tests/test_nav.py`.
 
 ### FX hedge trade
 
@@ -62,74 +69,103 @@ erDiagram
     FUND ||--o{ FX_HEDGE_TRADE : "recommended per exposure"
 ```
 
-**Fund** is the reporting unit and owns the base currency. Cashflows carry their fund and its base currency; NAV schedules and hedge trades are computed per fund. At rest this is a `funds` table with a surrogate id, because names can change while references shouldn't; the id is assigned on first sight, in name order, and stays stable. A fund cannot change its reporting currency through an upload — that would silently restate every historical figure — so a file that disagrees with the stored base currency is rejected.
+**Fund** is the reporting unit and owns the base currency. Cashflows carry their fund and its base currency; NAV schedules and hedge trades are computed per fund. A fund table would add nothing today — a fund is a name and a base currency — so it stays implicit. *Future note: at rest, funds get a store-assigned surrogate id, because names can change while references shouldn't.*
 
 **Deal** sits between fund and cashflow, but the sample feed has no deal identifier, so a position here is a (fund, currency) pair and there is no deal model — a synthetic deal per position would add nothing. *Future note: when feeds carry deal ids, one additive migration adds a `deals` table and a nullable `cashflows.deal_id`. Old files keep loading, fund-level analytics are unchanged (they already aggregate per fund and currency), and deal-level IRR becomes a finer grouping of the same computation.*
 
-**Currency** is a reference set of ISO 4217 codes that every currency field validates against — a closed enum in code (`CurrencyCode`) and a `currencies` reference table at rest, seeded by a migration, with a foreign key from every currency column. Today that set is exactly the three currencies the sample feed uses (EUR, GBP, USD), not the full ISO 4217 list; this is what turns a typo like `GPB` into a validation error instead of silent bad data, and supporting a new currency is one enum member plus one row in a migration.
+**Currency** is a reference set of ISO 4217 codes that every currency field validates against — a closed enum in code, a reference table at rest. Today that set is exactly the three currencies the sample feed uses (EUR, GBP, USD), not the full ISO 4217 list; this is what turns a typo like `GPB` into a validation error instead of silent bad data, and supporting a new currency is a one-line addition to the enum.
 
 ### Schema evolution
 
-Data lives in SQLite, and the rules below are enforced rather than intended:
+Data lives in memory today — the priority was the analytics, not persistence — so evolution is answered as design. In production:
 
-- Every schema change is an Alembic migration, applied at deploy. The database is never edited by hand, and the application never calls `create_all` — migrations are the only way schema exists, so they run on every test and `tests/test_migrations.py` fails on any drift between them and the models.
-- Changes are additive: new optional columns with defaults, never repurposing a column. Migrations run in batch mode, because SQLite implements `ALTER` as a table rebuild; that is also why the metadata carries a constraint naming convention from revision one.
-- The Pydantic schemas are the contract; storage differs per backend. Amounts are exact text in SQLite and `NUMERIC` in PostgreSQL (`db/types.py`), which keeps `Decimal` lossless — SQLAlchemy's own `Numeric` round-trips through float on SQLite and would corrupt them. The cost is that amounts cannot be ordered or summed in SQL under SQLite; every aggregation happens in `riskview.analytics`.
-- Currencies and cashflow types are reference tables seeded by a data migration, and every currency and type column is a foreign key into them. Reference data belongs in migrations because the schema is unusable without it; client data never does.
+- Every schema change is an Alembic migration, applied at deploy. The database is never edited by hand.
+- Changes are additive: new optional columns with defaults, never repurposing a column.
+- The Pydantic schemas are the contract; storage can differ per backend (amounts are strings in SQLite, `NUMERIC` in PostgreSQL).
 - Unknown cashflow types are rejected at ingestion until analytics handle them; silently ignoring one would produce a wrong NAV.
-- **Shipped:** cashflows and everything derived from them carry a projection version, making each uploaded batch immutable and versioned. Part 4 relies on it. One departure from the pseudocode below: the version is per fund, not global, because a file containing one client's fund must leave every other fund's published projection alone.
+- Next migration: a `projection_version` on cashflows and everything derived from them, making each uploaded batch immutable and versioned. Part 4 relies on it.
 
 ## Part 2 — Pipeline Design
 
 ```mermaid
-flowchart LR
-    A[Client file upload<br/>CSV / Excel] --> B[Ingestion<br/>read → clean → validate]
-    B -->|corrections & rejects| R[Ingestion report]
-    B -->|validated batch vN| C[(SQLite)]
-    C --> D[Analytics<br/>IRR → NAV → hedges]
-    D -->|results for vN| C
-    C --> E[Serving API]
-    E --> F[Client web app]
-    R --> G[Ops / data supplier]
+flowchart TD
+    APP["Client web app"] -->|"POST /ingest — CSV / Excel"| ING["Ingestion<br/>read → Cashflow.model_validate"]
+    ING --> OK{"every row valid?"}
+
+    OK -->|no| REJ[/"422 — every bad row,<br/>with line, id and reason"/]
+    REJ --> SUP["Data supplier fixes the file"]
+    SUP -.->|re-upload| ING
+
+    OK -->|yes| ST[("Store — batch vN")]
+    ST --> AN["Analytics<br/>IRR → NAV → hedges"]
+    AN -->|"results for vN"| ST
+    ST --> API["Serving API<br/>GET /funds/*"]
+    API -->|"200 JSON"| APP
+
+    classDef fail fill:#fde8e8,stroke:#c0392b,color:#7b241c
+    class REJ fail
 ```
+
+Nothing crosses the `OK` gate but a whole valid batch, so the store, the analytics and everything served are always a complete picture of one uploaded file.
 
 ### Trigger mechanism and step dependencies
 
-A file upload triggers ingestion; a validated batch makes analytics for the affected funds due; serving reads only stored results. Analytics are computed at ingestion, inside the same transaction as the batch, and serving reads them back from rows without ever running the analytics engine. Every step reads and writes stored artifacts, so the same steps can later run as queue workers without changing their logic.
+A file upload triggers ingestion; a validated batch makes analytics for the affected funds due; serving reads only stored results. The current implementation computes analytics on first read and caches them per batch — equivalent to computing at ingestion, since analytics are deterministic, and the whole computation takes milliseconds. Every step reads and writes stored artifacts, so the same steps can later run as queue workers without changing their logic.
 
 ### Where each piece of logic lives
 
 | Layer | Package | Role |
 |---|---|---|
-| Ingestion | `riskview.ingestion` | CSV/Excel readers, cleaning, validation; the only place dirty data exists |
+| Ingestion | `riskview.ingestion` | CSV/Excel readers; maps source headers onto model fields and validates each row; the only place dirty data exists |
 | Analytics | `riskview.analytics` | pure functions from cashflows to IRR, NAV and hedges; no I/O |
-| Storage | `riskview.db` | ORM models, migrations, and the repository — the only place SQL exists |
-| Serving | `riskview.api` | the ingest endpoint plus read-only views over stored results |
+| Serving | `riskview.api` + `riskview.store` | the ingest endpoint plus read-only views over stored results; in-memory today, PostgreSQL behind the same interface in production |
 
 Shared shapes live in `riskview.schemas` and `riskview.main` wires everything together. Each layer depends only on the shapes, so any of them can be split out later.
 
 ### Dirty data handling
 
-Fix only what is unambiguous, and record every fix: stray characters, known date formats, thousands separators, a short map of known currency typos (`GPB→GBP`). Anything else is rejected row by row with a reason; one bad row never blocks the batch, and the accepted/corrected/rejected report goes back to the data supplier. Date formats are a fixed whitelist because `03/04/2026` reads differently under day-first and month-first conventions — the convention comes from the source contract and is never guessed.
+Cleaning and validation are one step, not two. The `Cashflow` model does all of it: `@field_validator(..., mode="before")` methods normalise the raw client value, the field's own type coerces it and checks it against the closed sets, and a `@model_validator(mode="after")` checks the invariants that span fields — signs, and local against base. Ingestion has no cleaning code of its own: it maps the source headers onto model fields and calls `Cashflow.model_validate(row, context=fixes)`. That matters beyond tidiness, because a cleaning stage sitting in front of a model is a second place for the rules to live and drift from.
+
+Fix only what is unambiguous, and record every fix: stray characters, known date formats, thousands separators, a short map of known currency typos (`GPB→GBP`). Fixes are appended to the list passed as the validation context, so an accepted row still reports exactly what changed. Date formats are a fixed whitelist because `03/04/2026` reads differently under day-first and month-first conventions — the convention comes from the source contract and is never guessed.
+
+Anything not unambiguously fixable fails validation, and **a batch is all-or-nothing**. Every bad row is collected first, with Pydantic's reason and the offending value, and only then is the batch refused — so the supplier sees every problem in one pass rather than fixing the file one row per round trip. Nothing is stored and no analytics run.
+
+Partial acceptance was the alternative and is the wrong trade here. A fund's IRR and NAV schedule are computed from all of its cashflows, so dropping six bad rows out of 126 does not yield an incomplete answer — it yields a confident, plausible, wrong one, served to a client-facing app with no signal that anything is missing. Refusing the batch turns a silent data-quality problem into a loud one, at the cost of a re-send. A missing column and a repeated row id fail the file the same way, just earlier — the first before validation starts, the second as a validator on `IngestionResult`.
+
+### How failure is presented
+
+Every failure is caught at the boundary that can name it, and answered with the reason and the offending value — never a stack trace and never a partial result.
+
+| Failure | Caught | Response |
+|---|---|---|
+| Unsupported file type | reader | `422 unsupported file type 'pdf'; expected one of ['csv', 'xlsx']` |
+| Missing column | before validation | `422 input is missing expected columns: ['Date', ...]` |
+| Any row fails validation | per-row, all collected | `422 {error, rejects: [{line, row_id, errors}]}` — nothing stored |
+| Duplicate row id | `IngestionResult` validator | `422 duplicate cashflow ids in input: [17]` |
+| Unknown fund | serving | `404 unknown fund: 99` |
+| Fund holds no such currency | serving | `404 fund 1 has no JPY position` |
+
+The CLI presents the same failures on stderr and exits non-zero. Reads cannot fail on data quality, because unvalidated data never reaches the store.
 
 ### Idempotency
 
-Ingestion is a pure function of the file bytes, and the SHA-256 of those bytes is the batch's idempotency key: re-uploading a file already ingested is a no-op that returns the original report. A file that does land is written as a new immutable version rather than over the top of the last one, and analytics are deterministic. Re-running any step, or the whole pipeline, gives the same result, so retries are always safe.
+Ingestion is a pure function of the file bytes, and saving a batch replaces each fund's projections rather than appending. Analytics are deterministic. Re-running any step, or the whole pipeline, gives the same result, so retries are always safe.
 
 ### Pseudocode
 
 ```
 on cashflow_file_uploaded(file):
-    if batch := find_batch(sha256(file)): return report(batch)   # same bytes, already done
-    result = ingest(file)                     # rows → clean → validate → {accepted, corrected, rejected}
-    if result.rejects: notify(supplier, result.rejects)
-    batch = record_batch(result, sha256(file))               # immutable audit row
-    for fund in funds_in(result):                            # one transaction for the whole file
-        version = new_version(fund, batch)                   # immutable projection version
-        save_cashflows(version, result.cashflows_for(fund))
-        save_analytics(version, compute(fund, ...))          # IRR → NAV → hedges, pure
-        set_current(fund, version)            # atomic pointer swap; serving never sees partial state
-    commit()                                  # any failure above leaves the last good state untouched
+    try:
+        result = ingest(file)                 # read → validate; all-or-nothing
+    except IngestionRejected as rejected:
+        notify(supplier, rejected.rejects)    # every bad row, with its reason
+        return                                # nothing stored, no analytics run
+
+    version = store.save_batch(result.cashflows)          # immutable projection version
+    for fund in funds_in(result):
+        analytics = compute(fund, store.cashflows(fund, version))   # IRR → NAV → hedges, pure
+        store.save_analytics(fund, version, analytics)
+    store.set_current(version)                # atomic pointer swap; serving never sees partial state
 ```
 
 ## Part 4 — Trade-offs

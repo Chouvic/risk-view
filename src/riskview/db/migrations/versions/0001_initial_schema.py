@@ -43,11 +43,8 @@ def upgrade() -> None:
     sa.Column('content_sha256', sa.String(length=64), nullable=False),
     sa.Column('byte_size', sa.Integer(), nullable=False),
     sa.Column('received_at', riskview.db.types.UtcDateTime(), nullable=False),
-    sa.Column('status', sa.String(length=16), nullable=False),
     sa.Column('accepted_count', sa.Integer(), nullable=False),
     sa.Column('corrected_count', sa.Integer(), nullable=False),
-    sa.Column('rejected_count', sa.Integer(), nullable=False),
-    sa.CheckConstraint("status IN ('accepted', 'partial')", name=op.f('ck_ingestion_batches_status')),
     sa.PrimaryKeyConstraint('id', name=op.f('pk_ingestion_batches')),
     sa.UniqueConstraint('content_sha256', name=op.f('uq_ingestion_batches_content_sha256'))
     )
@@ -72,19 +69,6 @@ def upgrade() -> None:
     )
     with op.batch_alter_table('ingestion_corrections', schema=None) as batch_op:
         batch_op.create_index(batch_op.f('ix_ingestion_corrections_batch_id'), ['batch_id'], unique=False)
-
-    op.create_table('ingestion_rejects',
-    sa.Column('id', sa.Integer(), nullable=False),
-    sa.Column('batch_id', sa.Integer(), nullable=False),
-    sa.Column('line', sa.Integer(), nullable=False),
-    sa.Column('row_id', sa.String(length=64), nullable=False),
-    sa.Column('seq', sa.Integer(), nullable=False),
-    sa.Column('message', sa.Text(), nullable=False),
-    sa.ForeignKeyConstraint(['batch_id'], ['ingestion_batches.id'], name=op.f('fk_ingestion_rejects_batch_id_ingestion_batches'), ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id', name=op.f('pk_ingestion_rejects'))
-    )
-    with op.batch_alter_table('ingestion_rejects', schema=None) as batch_op:
-        batch_op.create_index(batch_op.f('ix_ingestion_rejects_batch_id'), ['batch_id'], unique=False)
 
     op.create_table('projection_versions',
     sa.Column('id', sa.Integer(), nullable=False),
@@ -204,10 +188,6 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f('ix_projection_versions_batch_id'))
 
     op.drop_table('projection_versions')
-    with op.batch_alter_table('ingestion_rejects', schema=None) as batch_op:
-        batch_op.drop_index(batch_op.f('ix_ingestion_rejects_batch_id'))
-
-    op.drop_table('ingestion_rejects')
     with op.batch_alter_table('ingestion_corrections', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_ingestion_corrections_batch_id'))
 

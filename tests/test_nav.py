@@ -1,10 +1,4 @@
-"""NAV schedule tests.
-
-The two checks right below the fixture are the schedule's core correctness
-invariants, not just plausible-looking numbers — both fall directly out of
-how NAV(t) and the position's IRR are defined. If either fails, the
-discounting logic itself is wrong, not just imprecise.
-"""
+"""NAV schedule tests, including the brief's two sanity checks."""
 
 from decimal import Decimal
 
@@ -20,22 +14,13 @@ def fund_i(sample_result):
 
 
 def test_sanity_nav_at_time_zero_is_zero(fund_i):
-    """NAV(t) is the PV of every flow at the position's own IRR, and the IRR is
-    defined as the rate that zeroes that same PV at the first flow date — so
-    NAV at time zero must be exactly 0 by construction, not just close to it.
-    PASS: every schedule's first point is 0.00. FAIL: the IRR solver and the
-    NAV discounting formula have drifted apart — a bug in the core math.
-    """
+    """Exact, not approximate: the IRR is by definition the rate that zeroes PV at the first flow date."""
     for schedule in [*fund_i.nav_schedules.values(), fund_i.fund_nav_schedule]:
         assert schedule.points[0].nav == Decimal("0.00")
 
 
 def test_sanity_nav_at_final_date_equals_terminal_value(fund_i, sample_result):
-    """At the final cashflow date there's nothing left to discount forward, so
-    NAV there must equal that date's own cashflow exactly. PASS: the last
-    schedule point's nav matches the terminal flow. FAIL: flows are being
-    discounted, dropped, or double-counted at the schedule's boundary date.
-    """
+    """Nothing is left to discount forward at the final date, so NAV there is that date's own cashflow."""
     for currency, schedule in fund_i.nav_schedules.items():
         final = schedule.points[-1]
         terminal = sum(

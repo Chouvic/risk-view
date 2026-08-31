@@ -21,8 +21,8 @@ def _fund_with_version(session) -> int:
     _insert(
         session,
         "INSERT INTO ingestion_batches (id, source_filename, content_sha256, byte_size, received_at,"
-        " status, accepted_count, corrected_count, rejected_count)"
-        " VALUES (1, 'f.csv', 'abc', 1, '2026-01-01', 'accepted', 1, 0, 0)",
+        " accepted_count, corrected_count)"
+        " VALUES (1, 'f.csv', 'abc', 1, '2026-01-01', 1, 0)",
     )
     _insert(
         session,

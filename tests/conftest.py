@@ -27,12 +27,7 @@ def sample_csv_path() -> Path:
 
 @pytest.fixture(scope="session")
 def sample_xlsx_path(tmp_path_factory) -> Path:
-    """The sample as a workbook, built at test time so no binary is committed.
-
-    Cells are written with native types where the source value has one — the way a
-    real export looks — so the Excel reader's cell-to-text coercion is exercised.
-    Malformed values stay text, which is also how they would survive a real export.
-    """
+    """The sample as a workbook, with native cell types where the source has one, as a real export would."""
     workbook = Workbook()
     sheet = workbook.active
     with SAMPLE_CSV.open(newline="") as handle:

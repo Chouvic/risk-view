@@ -16,7 +16,6 @@ def _fund(result: IngestionResult, name: str) -> IngestionResult:
     return IngestionResult(
         cashflows=tuple(cf for cf in result.cashflows if cf.fund_name == name),
         corrections=(),
-        rejects=(),
     )
 
 
@@ -89,7 +88,6 @@ def test_analytics_track_the_newest_version(seeded_repo, session, sample_result,
     without_usd = IngestionResult(
         cashflows=tuple(cf for cf in sample_result.cashflows if cf.currency != "USD"),
         corrections=(),
-        rejects=(),
     )
     seeded_repo.save_batch(without_usd, source("revision"))
     session.commit()
@@ -142,7 +140,7 @@ def test_fund_ids_follow_name_order_not_file_order(repo, session, sample_result,
     """Ids are assigned in sorted-name order, so a file that happens to list
     Fund II first must not renumber the funds."""
     reversed_batch = IngestionResult(
-        cashflows=tuple(reversed(sample_result.cashflows)), corrections=(), rejects=()
+        cashflows=tuple(reversed(sample_result.cashflows)), corrections=()
     )
     repo.save_batch(reversed_batch, source("reversed"))
     session.commit()
@@ -157,15 +155,21 @@ def test_fund_ids_follow_name_order_not_file_order(repo, session, sample_result,
 
 
 def test_a_failed_batch_leaves_no_trace(seeded_repo, session, sample_result, source):
-    """A file that violates the natural key at INSERT must not land a batch row,
-    a version, or a moved pointer."""
+    """A batch that violates the natural key at INSERT must not land a batch row,
+    a version, or a moved pointer.
+
+    IngestionResult's own validator normally refuses such a batch before storage;
+    model_construct bypasses it deliberately, so the database constraint — the
+    defence in depth behind that validator — is what this test exercises."""
     published = seeded_repo.current_version_id(1)
     flows = [cf for cf in sample_result.cashflows if cf.fund_name == "Fund I"]
     duplicate_natural_key = flows[-1].model_copy(update={"id": 99999})
 
     with pytest.raises(Exception):  # noqa: B017 - IntegrityError from the unique constraint
         seeded_repo.save_batch(
-            IngestionResult(cashflows=(*flows, duplicate_natural_key), corrections=(), rejects=()),
+            IngestionResult.model_construct(
+                cashflows=(*flows, duplicate_natural_key), corrections=()
+            ),
             source("clashing"),
         )
         session.flush()
@@ -188,23 +192,21 @@ def test_a_fund_cannot_change_reporting_currency_by_upload(seeded_repo, sample_r
             if cf.fund_name == "Fund I" and cf.currency == "GBP"
         ),
         corrections=(),
-        rejects=(),
     )
     with pytest.raises(ValueError, match="reports in EUR"):
         seeded_repo.save_batch(relabelled, source("recurrency"))
 
 
 def test_the_batch_report_survives_the_upload(seeded_repo, session, sample_result):
-    batch = session.execute(text("SELECT id, status, corrected_count FROM ingestion_batches")).one()
-    batch_id, status, corrected = batch
+    batch = session.execute(text("SELECT id, corrected_count FROM ingestion_batches")).one()
+    batch_id, corrected = batch
 
-    assert (status, corrected) == ("accepted", 3)
+    assert corrected == 3
 
     stored = seeded_repo.batch(batch_id)
     corrections = CashflowRepository.corrections_of(stored)
 
     assert {c.row_id for c in corrections} == {"17", "21", "51"}
-    assert CashflowRepository.rejects_of(stored) == ()
     # Ordering within a row is preserved by the seq column.
     assert all(c.corrections == tuple(c.corrections) for c in corrections)
 

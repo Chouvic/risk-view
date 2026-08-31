@@ -1,12 +1,14 @@
 """ORM tables.
 
 Two ledgers, as docs/design.md describes. The *audit* ledger (ingestion_batches
-and its correction/reject rows) is immutable: one row per uploaded file, keyed by
-the SHA-256 of its bytes. The *projection* ledger is versioned: each batch mints a
-new projection_versions row per fund it contains, writes that version's cashflows
-and everything derived from them, and only then moves the fund's pointer in
-fund_current_version. Nothing is ever updated in place, so a revision is version
-N+1 and a rollback is a pointer move.
+and its correction rows) is immutable: one row per uploaded file, keyed by the
+SHA-256 of its bytes. Only accepted batches exist here — ingestion is
+all-or-nothing, so a file with any bad row is refused before storage is reached.
+The *projection* ledger is versioned: each batch mints a new projection_versions
+row per fund it contains, writes that version's cashflows and everything derived
+from them, and only then moves the fund's pointer in fund_current_version.
+Nothing is ever updated in place, so a revision is version N+1 and a rollback is
+a pointer move.
 
 Versions are per fund rather than per batch (design.md:123-127 shows one global
 version) because a file containing one client's fund must not disturb another's.
@@ -28,10 +30,6 @@ from riskview.db.base import Base
 # scope values for nav_schedules
 SCOPE_FUND = "fund"
 SCOPE_POSITION = "position"
-
-# status values for ingestion_batches
-STATUS_ACCEPTED = "accepted"
-STATUS_PARTIAL = "partial"
 
 
 def _now() -> datetime:
@@ -72,26 +70,14 @@ class IngestionBatch(Base):
     content_sha256: Mapped[str] = mapped_column(String(64), unique=True)
     byte_size: Mapped[int]
     received_at: Mapped[datetime] = mapped_column(default=_now)
-    status: Mapped[str] = mapped_column(String(16))
     accepted_count: Mapped[int]
     corrected_count: Mapped[int]
-    rejected_count: Mapped[int]
 
     corrections: Mapped[list["IngestionCorrection"]] = relationship(
         back_populates="batch",
         cascade="all, delete-orphan",
         passive_deletes=True,
         order_by="IngestionCorrection.line, IngestionCorrection.seq",
-    )
-    rejects: Mapped[list["IngestionReject"]] = relationship(
-        back_populates="batch",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-        order_by="IngestionReject.line, IngestionReject.seq",
-    )
-
-    __table_args__ = (
-        CheckConstraint(f"status IN ('{STATUS_ACCEPTED}', '{STATUS_PARTIAL}')", name="status"),
     )
 
 
@@ -111,23 +97,6 @@ class IngestionCorrection(Base):
     message: Mapped[str] = mapped_column(Text)
 
     batch: Mapped[IngestionBatch] = relationship(back_populates="corrections")
-
-
-class IngestionReject(Base):
-    """One validation failure on one dropped source row."""
-
-    __tablename__ = "ingestion_rejects"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    batch_id: Mapped[int] = mapped_column(
-        ForeignKey("ingestion_batches.id", ondelete="CASCADE"), index=True
-    )
-    line: Mapped[int]
-    row_id: Mapped[str] = mapped_column(String(64))
-    seq: Mapped[int]
-    message: Mapped[str] = mapped_column(Text)
-
-    batch: Mapped[IngestionBatch] = relationship(back_populates="rejects")
 
 
 # --------------------------------------------------------------------------

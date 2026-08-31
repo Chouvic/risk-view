@@ -25,15 +25,12 @@ from riskview.analytics import compute_fund_analytics
 from riskview.db.models import (
     SCOPE_FUND,
     SCOPE_POSITION,
-    STATUS_ACCEPTED,
-    STATUS_PARTIAL,
     CashflowRow,
     Fund,
     FundCurrentVersion,
     FxForwardTradeRow,
     IngestionBatch,
     IngestionCorrection,
-    IngestionReject,
     NavPointRow,
     NavScheduleRow,
     ProjectionVersion,
@@ -47,7 +44,6 @@ from riskview.schemas import (
     NavPoint,
     NavSchedule,
     RowCorrection,
-    RowReject,
 )
 
 __all__ = ["BatchSource", "CashflowRepository", "IngestionBatch", "UnknownFundError"]
@@ -119,20 +115,13 @@ class CashflowRepository:
             source_filename=source.filename,
             content_sha256=source.content_sha256,
             byte_size=source.byte_size,
-            status=STATUS_PARTIAL if summary["rejected"] else STATUS_ACCEPTED,
             accepted_count=summary["accepted"],
             corrected_count=summary["corrected"],
-            rejected_count=summary["rejected"],
         )
         batch.corrections = [
             IngestionCorrection(line=row.line, row_id=row.row_id, seq=seq, message=message)
             for row in result.corrections
             for seq, message in enumerate(row.corrections)
-        ]
-        batch.rejects = [
-            IngestionReject(line=row.line, row_id=row.row_id, seq=seq, message=message)
-            for row in result.rejects
-            for seq, message in enumerate(row.errors)
         ]
         self._session.add(batch)
         self._session.flush()
@@ -391,13 +380,6 @@ class CashflowRepository:
         return tuple(
             RowCorrection(line=line, row_id=row_id, corrections=messages)
             for (line, row_id), messages in _regroup(batch.corrections).items()
-        )
-
-    @staticmethod
-    def rejects_of(batch: IngestionBatch) -> tuple[RowReject, ...]:
-        return tuple(
-            RowReject(line=line, row_id=row_id, errors=messages)
-            for (line, row_id), messages in _regroup(batch.rejects).items()
         )
 
     # ------------------------------------------------------------------
