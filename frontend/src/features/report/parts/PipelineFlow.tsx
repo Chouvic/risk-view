@@ -40,7 +40,7 @@ const STAGES: Record<StageId, Stage> = {
     title: "All valid?",
     lives: "riskview.ingestion.service",
     what: "The only branch in the pipeline. A batch is all-or-nothing.",
-    fails: "Partial acceptance was the alternative and it is the wrong trade: IRR and NAV are computed from all of a fund's cashflows, so dropping six bad rows out of 126 does not give an incomplete answer — it gives a confident, plausible, wrong one.",
+    fails: "There is no partial path through this diagram. Why refusing a whole batch beats accepting most of it is argued below the panel.",
   },
   store: {
     id: "store",

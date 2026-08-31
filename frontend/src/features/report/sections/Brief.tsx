@@ -7,8 +7,8 @@ export function Brief() {
   return (
     <ReportSection id="brief">
       <Claim>
-        The brief asks for three computations and four written answers. This is where each one
-        lives.
+        The brief asks for three computations, three written parts and one implementation. This is
+        where each one lives.
       </Claim>
 
       <PairTable
