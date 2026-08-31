@@ -1,0 +1,15 @@
+Alembic migrations for riskview.
+
+They live inside the package so they ship with the wheel and `alembic upgrade
+head` works from an installed app, not only from a source checkout. alembic.ini
+at the repo root points here and deliberately carries no sqlalchemy.url — env.py
+takes it from riskview.config, so migrations and the running app can never
+disagree about which database they mean.
+
+    uv run alembic upgrade head                          # apply
+    uv run alembic revision --autogenerate -m "..."      # write a new one, then review it
+    uv run alembic check                                 # models vs migrations
+
+Revisions are emitted with render_as_batch, because SQLite implements ALTER as a
+table rebuild. That rebuild needs every constraint to have a deterministic name,
+which is what the naming convention in db/base.py provides.

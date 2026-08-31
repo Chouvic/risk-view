@@ -5,23 +5,26 @@ Cashflow. Rows that clean up unambiguously are accepted and reported as correcti
 rows that still fail validation are rejected with reasons. Parsing (ingest) is a
 pure function of the file bytes — same input, same result — and ingest_into is the
 one place a parsed batch reaches storage, so every entry point (the API's
-POST /ingest, a future CLI or queue worker) persists data the same way.
+POST /ingest, the CLI, a future queue worker) persists data the same way.
+
+Re-uploading a file is safe twice over: the SHA-256 of the bytes is the batch's
+idempotency key, so identical bytes are a no-op that returns the original report,
+and a file that does land is written as a new immutable version rather than over
+the top of the last one.
 """
 
 from collections import Counter
 from collections.abc import Iterable
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from riskview.store import CashflowStore
 
 from pydantic import ValidationError
 
+from riskview.db.repository import BatchSource, CashflowRepository, IngestionBatch
 from riskview.ingestion.preprocessing import CleaningError, clean_amount, clean_currency, clean_date
 from riskview.ingestion.readers import read_rows
 from riskview.schemas import (
     Cashflow,
+    IngestionReport,
     IngestionResult,
     RawCashflowRow,
     RowCorrection,
@@ -46,11 +49,40 @@ def ingest_file(path: str | Path) -> IngestionResult:
     return ingest(path.read_bytes(), path.name)
 
 
-def ingest_into(store: "CashflowStore", data: bytes, filename: str) -> IngestionResult:
-    """Parse, validate, and persist a batch — the single write path to storage."""
+def ingest_into(repository: CashflowRepository, data: bytes, filename: str) -> IngestionReport:
+    """Parse, validate, and persist a batch — the single write path to storage.
+
+    Does not commit: the caller owns the transaction, so either the whole file
+    lands — batch row, projections, analytics and the published pointer — or none
+    of it does.
+    """
+    source = BatchSource.of(data, filename)
+
+    existing = repository.find_batch(source.content_sha256)
+    if existing is not None:
+        # These exact bytes have been ingested before. Replaying them would mint a
+        # version identical to one already published, so return the original report.
+        return report_of(existing, duplicate=True)
+
     result = ingest(data, filename)
-    store.save_batch(result)
-    return result
+    batch = repository.save_batch(result, source)
+    return report_of(batch, duplicate=False)
+
+
+def report_of(batch: IngestionBatch, *, duplicate: bool) -> IngestionReport:
+    """Rebuild a batch's report from what was stored — the same shape whether it
+    is being returned from an upload or re-served months later."""
+    return IngestionReport(
+        batch_id=batch.id,
+        duplicate=duplicate,
+        summary={
+            "accepted": batch.accepted_count,
+            "corrected": batch.corrected_count,
+            "rejected": batch.rejected_count,
+        },
+        corrections=CashflowRepository.corrections_of(batch),
+        rejects=CashflowRepository.rejects_of(batch),
+    )
 
 
 def ingest(data: bytes, filename: str) -> IngestionResult:
@@ -76,6 +108,7 @@ def ingest(data: bytes, filename: str) -> IngestionResult:
             corrections.append(RowCorrection(line=line_no, row_id=raw.id, corrections=tuple(fixes)))
 
     _check_duplicate_ids(cashflows)
+    _check_duplicate_natural_keys(cashflows)
     return IngestionResult(cashflows=tuple(cashflows), corrections=tuple(corrections), rejects=tuple(rejects))
 
 
@@ -129,3 +162,17 @@ def _check_duplicate_ids(cashflows: list[Cashflow]) -> None:
     duplicates = sorted(cf_id for cf_id, n in counts.items() if n > 1)
     if duplicates:
         raise ValueError(f"duplicate cashflow ids in input: {duplicates}")
+
+
+def _check_duplicate_natural_keys(cashflows: list[Cashflow]) -> None:
+    """(fund, currency, date, type) identifies a cashflow, and is a unique
+    constraint at rest. Two rows sharing one is a broken file, not a row to drop:
+    nothing in the data says which of the pair is the real projection. Rejecting
+    the batch here gives the supplier a legible message instead of a database
+    IntegrityError surfacing as a 500."""
+    counts = Counter(
+        (cf.fund_name, cf.currency.value, cf.cashflow_date, cf.cashflow_type.value) for cf in cashflows
+    )
+    duplicates = sorted(str(key) for key, n in counts.items() if n > 1)
+    if duplicates:
+        raise ValueError(f"duplicate (fund, currency, date, type) in input: {duplicates}")

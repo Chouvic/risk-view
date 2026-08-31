@@ -2,16 +2,22 @@ import pytest
 from fastapi.testclient import TestClient
 
 from riskview.api import create_app
-
-
-@pytest.fixture(scope="module")
-def client(seeded_store):
-    return TestClient(create_app(seeded_store))
+from riskview.db.session import create_db_engine
 
 
 @pytest.fixture()
-def empty_client(store):
-    return TestClient(create_app(store))
+def client(engine, seeded_repo, session):
+    # seeded_repo committed through `session`, which shares this engine, so the
+    # app's own sessions see the data.
+    session.close()
+    with TestClient(create_app(engine)) as client:
+        yield client
+
+
+@pytest.fixture()
+def empty_client(engine):
+    with TestClient(create_app(engine)) as client:
+        yield client
 
 
 def test_funds_are_listed_with_database_ids(client):
@@ -80,3 +86,65 @@ def test_ingest_bad_csv_422(empty_client):
 def test_ingest_unsupported_format_422(empty_client):
     response = empty_client.post("/ingest", files={"file": ("cashflows.pdf", b"junk")})
     assert response.status_code == 422
+
+
+def test_reposting_the_same_bytes_is_a_no_op(empty_client, sample_csv_path):
+    with open(sample_csv_path, "rb") as handle:
+        first = empty_client.post("/ingest", files={"file": (sample_csv_path.name, handle)}).json()
+    with open(sample_csv_path, "rb") as handle:
+        second = empty_client.post("/ingest", files={"file": (sample_csv_path.name, handle)}).json()
+
+    assert first["duplicate"] is False
+    assert second["duplicate"] is True
+    assert second["batch_id"] == first["batch_id"]
+    assert second["summary"] == first["summary"]
+
+
+def test_stored_report_outlives_the_upload(empty_client, sample_csv_path):
+    with open(sample_csv_path, "rb") as handle:
+        posted = empty_client.post("/ingest", files={"file": (sample_csv_path.name, handle)}).json()
+
+    stored = empty_client.get(f"/ingestions/{posted['batch_id']}").json()
+
+    assert stored["summary"] == {"accepted": 126, "corrected": 3, "rejected": 0}
+    assert {row["row_id"] for row in stored["corrections"]} == {"17", "21", "51"}
+
+
+def test_unknown_ingestion_batch_404(empty_client):
+    assert empty_client.get("/ingestions/999").status_code == 404
+
+
+def test_duplicate_natural_key_is_a_422_not_a_500(empty_client):
+    """Two rows for the same (fund, currency, date, type) violate the unique
+    constraint at rest, so ingestion has to reject the file with a reason."""
+    rows = [
+        "ID,Fund Name,Date,Cashflow Type,Local Currency,Cashflow Amount Local,Cashflow Amount Base,Base Currency",
+        "1,Fund X,30/09/2025,Investment,GBP,-100,-110,EUR",
+        "2,Fund X,30/09/2025,Investment,GBP,-100,-110,EUR",
+    ]
+    response = empty_client.post("/ingest", files={"file": ("dupes.csv", "\n".join(rows).encode())})
+
+    assert response.status_code == 422
+    assert "duplicate (fund, currency, date, type)" in response.json()["detail"]
+
+
+def test_data_survives_a_restart(db_url, sample_csv_path):
+    """The point of the exercise: a second process, with its own engine over the
+    same file, serves the batch the first one ingested."""
+    with (
+        TestClient(create_app(create_db_engine(db_url))) as client,
+        open(sample_csv_path, "rb") as handle,
+    ):
+        client.post("/ingest", files={"file": (sample_csv_path.name, handle)})
+
+    with TestClient(create_app(create_db_engine(db_url))) as restarted:
+        assert [f["fund_id"] for f in restarted.get("/funds").json()] == [1, 2]
+        assert len(restarted.get("/funds/1/hedges").json()) == 40
+
+
+def test_the_app_refuses_an_unmigrated_database(tmp_path):
+    """No create_all anywhere: an empty file is not a usable database."""
+    engine = create_db_engine(f"sqlite+pysqlite:///{tmp_path / 'empty.db'}")
+    with pytest.raises(RuntimeError, match="alembic upgrade head"), TestClient(create_app(engine)):
+        pass
+    engine.dispose()

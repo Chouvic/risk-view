@@ -1,13 +1,15 @@
 """Application entry point — the composition root.
 
+    uv run alembic upgrade head
     uv run uvicorn riskview.main:app
 
-Starts with an empty store — nothing is loaded automatically. Post a file to
-POST /ingest to populate it. This is the only module that decides what store
-backs the running app; tests build the same create_app() around their own.
+Starts against the database named by RISKVIEW_DATABASE_URL (a local SQLite file
+by default) and refuses to serve if that database is behind the migrations. This
+is the only module that decides which database backs the running app; tests build
+the same create_app() around their own.
 """
 
 from riskview.api import create_app
-from riskview.store import CashflowStore
+from riskview.db.session import create_db_engine
 
-app = create_app(CashflowStore())
+app = create_app(create_db_engine())

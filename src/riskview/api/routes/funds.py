@@ -1,10 +1,15 @@
-"""Read-optimised endpoints over precomputed fund analytics."""
+"""Read-optimised endpoints over precomputed fund analytics.
+
+Nothing here recomputes: analytics were written at ingestion, so every handler is
+a query.
+"""
 
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from riskview.api.deps import get_fund_analytics, get_store
+from riskview.api.deps import get_fund_analytics, get_repository
+from riskview.db.repository import CashflowRepository
 from riskview.schemas import (
     FundAnalytics,
     FundIrr,
@@ -13,26 +18,14 @@ from riskview.schemas import (
     NavBundle,
     NavSchedule,
 )
-from riskview.store import CashflowStore
 
 router = APIRouter()
 
 
 @router.get("/funds")
-def funds(store: Annotated[CashflowStore, Depends(get_store)]) -> list[FundSummary]:
-    summaries = []
-    for fund_id in store.fund_ids():
-        analytics = store.analytics(fund_id)
-        summaries.append(
-            FundSummary(
-                fund_id=fund_id,
-                name=analytics.fund_name,
-                base_currency=analytics.base_currency,
-                currencies=sorted(analytics.currency_irr),
-                cashflow_count=len(store.cashflows(fund_id)),
-            )
-        )
-    return summaries
+def funds(repository: Annotated[CashflowRepository, Depends(get_repository)]) -> list[FundSummary]:
+    # Two queries whatever the number of funds — see CashflowRepository.fund_summaries.
+    return repository.fund_summaries()
 
 
 @router.get("/funds/{fund_id}/irr")

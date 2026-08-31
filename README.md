@@ -20,10 +20,19 @@ Requires Python ≥ 3.12 and [uv](https://docs.astral.sh/uv/).
 uv sync                       # install
 uv run pytest                 # run the test suite
 uv run python scripts/fund_report.py            # validate a cashflow file, print IRRs + NAV schedules
-uv run uvicorn riskview.main:app   # optional: serve the analytics as an API on :8000
 ```
 
-The report script reads `samples/cashflows.csv` by default (see [Data](#data)) and takes `--data path/to/file.csv|.xlsx`, `--fund NAME` and `--currency CCY`. The API starts with an empty store, so post a file first: `curl -F file=@samples/cashflows.csv localhost:8000/ingest`. It then serves `/funds`, `/funds/{id}/irr`, `/funds/{id}/nav`, `/funds/{id}/hedges`; interactive docs at `/docs`.
+The report script reads `samples/cashflows.csv` by default (see [Data](#data)) and takes `--data path/to/file.csv|.xlsx`, `--fund NAME` and `--currency CCY`. It never touches the database, so a client file can be checked before anyone decides to ingest it.
+
+To run the service, create the database and load a file into it:
+
+```bash
+uv run alembic upgrade head                     # create the schema; the only way it is ever created
+uv run riskview ingest samples/cashflows.csv    # 126 accepted, 3 corrected, 0 rejected
+uv run uvicorn riskview.main:app                # serve on :8000
+```
+
+The database is a local SQLite file (`riskview.db`), overridable with `RISKVIEW_DATABASE_URL`. The API serves `/funds`, `/funds/{id}/irr`, `/funds/{id}/nav`, `/funds/{id}/hedges` and `/ingestions/{batch_id}`; interactive docs at `/docs`. Uploading over HTTP works the same way as the CLI — `curl -F file=@samples/cashflows.csv localhost:8000/ingest` — and posting the same bytes twice is a no-op that returns the original report. The app refuses to start against a database that is behind the migrations, so `alembic upgrade head` is never optional.
 
 ## Approach
 
@@ -34,8 +43,10 @@ src/riskview/
 ├── schemas.py    # all Pydantic models: domain entities, ingestion report, API responses
 ├── ingestion/    # readers (CSV/Excel) → cleaning → validation; the only place dirty data exists
 ├── analytics/    # pure functions: cashflows → IRR → NAV schedule → hedge recommendations
-├── store.py      # in-memory store of batches + cached analytics (persistence is a design-doc step)
-├── api/          # FastAPI app: the /ingest endpoint plus read endpoints over the store
+├── db/           # SQLAlchemy models, engine/session, repository, and the Alembic migrations
+├── api/          # FastAPI app: the /ingest endpoint plus read endpoints over stored results
+├── cli.py        # `riskview ingest FILE`
+├── config.py     # settings; RISKVIEW_DATABASE_URL
 └── main.py       # composition root
 ```
 
@@ -46,7 +57,9 @@ Fund I results (base EUR): IRR 9.95% GBP, 7.89% EUR, 12.05% USD, 10.05% fund-lev
 ## Assumptions
 
 - The sample has no deal column, so a position is one (fund, currency) pair, and there's no Deal model in code today — see the design doc for the additive migration to deal-grained feeds.
-- Data lives in memory: the assignment asks for ingestion, validation, and computation, not persistence. The database layer (PostgreSQL + Alembic, behind the same store interface) is described in the design doc.
+- Data lives in SQLite, created and evolved only by Alembic migrations — the application never calls `create_all`, so the migrations are exercised on every test run. Amounts are stored as exact text (SQLite has no exact numeric type) and become `NUMERIC` on PostgreSQL, which is the one dialect-specific choice; see `db/types.py`.
+- Each upload is an immutable projection version per fund, published by moving a pointer as the last step of one transaction, so a file lands whole or not at all and readers never see a partial batch. Re-uploading identical bytes is a no-op keyed on their SHA-256; a corrected file is version N+1 rather than an overwrite.
+- Analytics are computed at ingestion and served from stored rows — reads never run the analytics engine.
 - Currency is a closed set — EUR, GBP, USD, the three the sample feed uses — not the full ISO 4217 list. Any other code is rejected at validation; supporting a new one is a one-line addition to `CurrencyCode`.
 - IRR is XIRR-style: dated flows, actual/365, solved by bisection. Currency-level IRR uses local amounts; fund-level uses base amounts.
 - NAV(t) is the PV of flows dated on or after t at the relevant IRR — the definition under which the brief's sanity checks hold. Open exposure at t is the PV of flows after t (at t=0, the invested amount) and is what hedges cover.

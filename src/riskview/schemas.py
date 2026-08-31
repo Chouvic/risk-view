@@ -1,6 +1,6 @@
 """All Pydantic models in one module, grouped by role — the single source of
 truth for shapes. ("schemas" = validation/serialisation, the FastAPI ecosystem
-convention; ORM models would live in a db/models.py when persistence is added.)
+convention; the ORM models these map to live in riskview/db/models.py.)
 
 A single file is the right size here — the official FastAPI full-stack template
 does the same. When the app grows, the groups below are the natural split lines:
@@ -37,7 +37,7 @@ class FrozenModel(BaseModel):
     Two reasons, not style: (1) Pydantic does not re-validate on assignment by
     default, so a mutable record could be edited into a state its own validators
     reject — freezing closes that hole; (2) validated batches and analytics
-    results are cached and shared (store cache, test fixtures), so one
+    results are shared between callers (batches, test fixtures), so one
     caller mutating an instance would corrupt it for every other reader.
     Transient carriers with no invariants (RawCashflowRow, API responses) stay
     plain BaseModel. Note freezing is shallow — it blocks attribute assignment,
@@ -191,6 +191,27 @@ class IngestionResult(FrozenModel):
         }
 
 
+class IngestionReport(BaseModel):
+    """What happened to one uploaded file — the reconciliation artefact.
+
+    Returned by POST /ingest and stored, so GET /ingestions/{batch_id} can serve
+    it again long after the upload response has been lost.
+    """
+
+    batch_id: int = Field(description="Id of the stored ingestion batch this file landed in.")
+    duplicate: bool = Field(
+        description=(
+            "True when these exact bytes had already been ingested; the upload was a no-op and this "
+            "report is the original one."
+        )
+    )
+    summary: dict[str, int] = Field(description="Counts of accepted, corrected, and rejected rows.")
+    corrections: tuple[RowCorrection, ...] = Field(
+        description="Rows that needed an automatic fix before they validated."
+    )
+    rejects: tuple[RowReject, ...] = Field(description="Rows that failed validation and were dropped.")
+
+
 # --------------------------------------------------------------------------
 # Analytics output — the full derived picture for one fund
 # --------------------------------------------------------------------------
@@ -251,13 +272,3 @@ class NavBundle(BaseModel):
     by_currency: dict[str, NavSchedule] = Field(
         description="NAV schedule per position currency, in local-currency terms."
     )
-
-
-class IngestionReport(BaseModel):
-    """Response for POST /ingest: what was accepted, fixed, or dropped."""
-
-    summary: dict[str, int] = Field(description="Counts of accepted, corrected, and rejected rows.")
-    corrections: tuple[RowCorrection, ...] = Field(
-        description="Rows that needed an automatic fix before they validated."
-    )
-    rejects: tuple[RowReject, ...] = Field(description="Rows that failed validation and were dropped.")

@@ -17,3 +17,8 @@ build/
 
 data/
 .scratch/
+
+# SQLite database and its WAL sidecars
+*.db
+*.db-wal
+*.db-shm
