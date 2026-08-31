@@ -18,7 +18,14 @@ from pydantic import ValidationError
 
 from riskview.db.repository import BatchSource, CashflowRepository, IngestionBatch
 from riskview.ingestion.readers import read_rows
-from riskview.schemas import Cashflow, IngestionReport, IngestionResult, RowCorrection, RowReject
+from riskview.schemas import (
+    Cashflow,
+    FundVersionOutcome,
+    IngestionReport,
+    IngestionResult,
+    RowCorrection,
+    RowReject,
+)
 
 # The file-format contract, and the only thing ingestion knows that the model does not.
 _HEADER_MAP = {
@@ -64,16 +71,20 @@ def ingest_into(repository: CashflowRepository, data: bytes, filename: str) -> I
     if existing is not None:
         # These exact bytes have been ingested before. Replaying them would mint a
         # version identical to one already published, so return the original report.
-        return report_of(existing, duplicate=True)
+        return report_of(existing, duplicate=True, funds=repository.outcomes_of(existing))
 
     result = ingest(data, filename)
-    batch = repository.save_batch(result, source)
-    return report_of(batch, duplicate=False)
+    outcome = repository.save_batch(result, source)
+    return report_of(outcome.batch, duplicate=False, funds=outcome.funds)
 
 
-def report_of(batch: IngestionBatch, *, duplicate: bool) -> IngestionReport:
+def report_of(
+    batch: IngestionBatch, *, duplicate: bool, funds: tuple[FundVersionOutcome, ...] = ()
+) -> IngestionReport:
     """Rebuild a batch's report from what was stored — the same shape whether it
-    is being returned from an upload or re-served months later."""
+    is being returned from an upload or re-served months later. Only the upload
+    response can list unchanged funds; a re-served report shows what the batch
+    minted (repository.outcomes_of), which is its whole persistent effect."""
     return IngestionReport(
         batch_id=batch.id,
         duplicate=duplicate,
@@ -82,6 +93,7 @@ def report_of(batch: IngestionBatch, *, duplicate: bool) -> IngestionReport:
             "corrected": batch.corrected_count,
         },
         corrections=CashflowRepository.corrections_of(batch),
+        funds=funds,
     )
 
 

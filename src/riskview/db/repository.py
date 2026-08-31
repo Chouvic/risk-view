@@ -15,7 +15,9 @@ loudly instead of being trusted.
 
 import hashlib
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
+from decimal import Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -39,14 +41,61 @@ from riskview.schemas import (
     Cashflow,
     FundAnalytics,
     FundSummary,
+    FundVersionOutcome,
     FxForwardTrade,
     IngestionResult,
     NavPoint,
     NavSchedule,
     RowCorrection,
+    VersionAction,
+    VersionInfo,
 )
 
-__all__ = ["BatchSource", "CashflowRepository", "IngestionBatch", "UnknownFundError"]
+__all__ = [
+    "BatchSaveOutcome",
+    "BatchSource",
+    "CashflowRepository",
+    "IngestionBatch",
+    "UnknownFundError",
+    "canonical_content_hash",
+]
+
+
+def canonical_content_hash(cashflows: Iterable[Cashflow]) -> str:
+    """Hash one fund's schedule by content, so a re-export mints nothing.
+
+    Two hashes with two jobs: the batch's byte SHA answers "have these exact bytes
+    been uploaded before?", while this hash answers "is this fund's schedule
+    actually different?". Reordered rows, renumbered ids, or a CSV-to-Excel
+    round-trip all change the bytes but not the content, and must not mint a
+    version — a phantom version re-runs analytics and shows a revision that never
+    happened. Neither hash is an identity: versions are named by version_no.
+
+    Client row ids are excluded (renumbering is not a revision) and so is
+    fund_name (the hash is computed per fund). Decimals are serialised as
+    `format(value.normalize(), "f")`: str() alone is scale-sensitive ("100" vs
+    "100.00"), and normalize() alone re-introduces exponent notation
+    (Decimal("100.00").normalize() == Decimal("1E+2")). Zero is special-cased
+    because normalize() preserves the sign of negative zero.
+    """
+
+    def number(value: Decimal) -> str:
+        return "0" if value == 0 else format(value.normalize(), "f")
+
+    lines = sorted(
+        "|".join(
+            (
+                cf.currency.value,
+                cf.cashflow_date.isoformat(),
+                cf.cashflow_type.value,
+                number(cf.amount_local),
+                number(cf.amount_base),
+                cf.base_currency.value,
+            )
+        )
+        for cf in cashflows
+    )
+    return hashlib.sha256("\n".join(lines).encode()).hexdigest()
 
 
 class UnknownFundError(KeyError):
@@ -74,6 +123,14 @@ class BatchSource:
         )
 
 
+@dataclass(frozen=True)
+class BatchSaveOutcome:
+    """One save_batch call's effect: the audit row, and what happened per fund."""
+
+    batch: IngestionBatch
+    funds: tuple[FundVersionOutcome, ...]
+
+
 class CashflowRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
@@ -88,12 +145,15 @@ class CashflowRepository:
             select(IngestionBatch).where(IngestionBatch.content_sha256 == content_sha256)
         )
 
-    def save_batch(self, result: IngestionResult, source: BatchSource) -> IngestionBatch:
-        """Persist one uploaded file as a new projection version per fund.
+    def save_batch(self, result: IngestionResult, source: BatchSource) -> BatchSaveOutcome:
+        """Persist one uploaded file as a new projection version per changed fund.
 
-        Does not commit — the caller owns the transaction, so a failure anywhere
-        below leaves no batch row, no partial version, and every pointer still on
-        the last good version.
+        A fund whose canonical content hash matches its current version is left
+        untouched — the batch is still recorded (a submission is an audit fact
+        even when it changes nothing), but no version is minted and no analytics
+        run. Does not commit — the caller owns the transaction, so a failure
+        anywhere below leaves no batch row, no partial version, and every pointer
+        still on the last good version.
         """
         batch = self._record_batch(result, source)
 
@@ -103,11 +163,11 @@ class CashflowRepository:
 
         # Sorted by name, not file order: fund ids are assigned on first sight and
         # must not depend on which row happened to come first in the upload.
-        for name in sorted(by_fund):
-            cashflows = sorted(by_fund[name], key=lambda cf: cf.id)
-            self._publish_version(batch, name, cashflows)
-
-        return batch
+        outcomes = tuple(
+            self._publish_version(batch, name, sorted(by_fund[name], key=lambda cf: cf.id))
+            for name in sorted(by_fund)
+        )
+        return BatchSaveOutcome(batch=batch, funds=outcomes)
 
     def _record_batch(self, result: IngestionResult, source: BatchSource) -> IngestionBatch:
         summary = result.summary()
@@ -127,13 +187,29 @@ class CashflowRepository:
         self._session.flush()
         return batch
 
-    def _publish_version(self, batch: IngestionBatch, name: str, cashflows: list[Cashflow]) -> None:
+    def _publish_version(
+        self, batch: IngestionBatch, name: str, cashflows: list[Cashflow]
+    ) -> FundVersionOutcome:
         fund = self._get_or_create_fund(name, cashflows[0].base_currency.value)
+
+        # Mint only on real change. The hash is over validated content — reordered
+        # rows, renumbered ids, or a CSV-to-Excel re-export land here with a fresh
+        # byte SHA but an identical schedule, and must not produce a version.
+        content_hash = canonical_content_hash(cashflows)
+        current = self._current_version_row(fund.id)
+        if current is not None and current.content_hash == content_hash:
+            return FundVersionOutcome(
+                fund_id=fund.id,
+                fund_name=fund.name,
+                action=VersionAction.UNCHANGED,
+                version_no=current.version_no,
+            )
 
         version = ProjectionVersion(
             fund_id=fund.id,
             batch_id=batch.id,
             version_no=self._next_version_no(fund.id),
+            content_hash=content_hash,
             cashflow_count=len(cashflows),
         )
         version.cashflows = [
@@ -173,6 +249,19 @@ class CashflowRepository:
         self._session.add(version)
         self._session.flush()
         self._point_at(fund.id, version.id)
+        return FundVersionOutcome(
+            fund_id=fund.id,
+            fund_name=fund.name,
+            action=VersionAction.NEW if version.version_no == 1 else VersionAction.REVISED,
+            version_no=version.version_no,
+        )
+
+    def _current_version_row(self, fund_id: int) -> ProjectionVersion | None:
+        return self._session.scalar(
+            select(ProjectionVersion)
+            .join(FundCurrentVersion, FundCurrentVersion.version_id == ProjectionVersion.id)
+            .where(FundCurrentVersion.fund_id == fund_id)
+        )
 
     @staticmethod
     def _schedule_row(scope: str, schedule: NavSchedule) -> NavScheduleRow:
@@ -240,13 +329,60 @@ class CashflowRepository:
     def current_version_id(self, fund_id: int) -> int:
         return self._current(fund_id)[1]
 
+    def current_version_no(self, fund_id: int) -> int:
+        row = self._current_version_row(fund_id)
+        if row is None:
+            raise UnknownFundError(fund_id)
+        return row.version_no
+
     def version_count(self, fund_id: int) -> int:
         return self._session.scalar(
             select(func.count()).select_from(ProjectionVersion).where(ProjectionVersion.fund_id == fund_id)
         )
 
-    def cashflows(self, fund_id: int) -> list[Cashflow]:
-        fund, version_id = self._current(fund_id)
+    def versions(self, fund_id: int) -> list[VersionInfo]:
+        """A fund's projection history, oldest first. Superseded versions are
+        retained, so this is the audit trail of every revision that landed."""
+        _, current_id = self._current(fund_id)
+        rows = self._session.scalars(
+            select(ProjectionVersion)
+            .where(ProjectionVersion.fund_id == fund_id)
+            .order_by(ProjectionVersion.version_no)
+        )
+        return [
+            VersionInfo(
+                version_no=row.version_no,
+                batch_id=row.batch_id,
+                created_at=row.created_at,
+                cashflow_count=row.cashflow_count,
+                content_hash=row.content_hash,
+                is_current=row.id == current_id,
+            )
+            for row in rows
+        ]
+
+    def outcomes_of(self, batch: IngestionBatch) -> tuple[FundVersionOutcome, ...]:
+        """The versions a stored batch minted, for a re-served report. Unchanged
+        outcomes are not stored — a batch's persistent effect is exactly its
+        minted versions — so they do not reappear on replay."""
+        rows = self._session.execute(
+            select(Fund, ProjectionVersion.version_no)
+            .join(ProjectionVersion, ProjectionVersion.fund_id == Fund.id)
+            .where(ProjectionVersion.batch_id == batch.id)
+            .order_by(Fund.name)
+        ).all()
+        return tuple(
+            FundVersionOutcome(
+                fund_id=fund.id,
+                fund_name=fund.name,
+                action=VersionAction.NEW if version_no == 1 else VersionAction.REVISED,
+                version_no=version_no,
+            )
+            for fund, version_no in rows
+        )
+
+    def cashflows(self, fund_id: int, version_no: int | None = None) -> list[Cashflow]:
+        fund, version_id = self._resolve(fund_id, version_no)
         rows = self._session.scalars(
             select(CashflowRow)
             .where(CashflowRow.version_id == version_id)
@@ -266,9 +402,12 @@ class CashflowRepository:
             for row in rows
         ]
 
-    def analytics(self, fund_id: int) -> FundAnalytics:
-        """Read the stored analytics. Never recomputes — they were written at ingest."""
-        fund, version_id = self._current(fund_id)
+    def analytics(self, fund_id: int, version_no: int | None = None) -> FundAnalytics:
+        """Read the stored analytics. Never recomputes — they were written at ingest.
+
+        version_no picks a historical version; None serves the published pointer.
+        """
+        fund, version_id = self._resolve(fund_id, version_no)
 
         schedules = self._session.scalars(
             select(NavScheduleRow)
@@ -335,7 +474,14 @@ class CashflowRepository:
         position schedules, so no fund's cashflows or analytics are rebuilt here.
         """
         rows = self._session.execute(
-            select(Fund.id, Fund.name, Fund.base_currency, ProjectionVersion.id, ProjectionVersion.cashflow_count)
+            select(
+                Fund.id,
+                Fund.name,
+                Fund.base_currency,
+                ProjectionVersion.id,
+                ProjectionVersion.cashflow_count,
+                ProjectionVersion.version_no,
+            )
             .join(FundCurrentVersion, FundCurrentVersion.fund_id == Fund.id)
             .join(ProjectionVersion, ProjectionVersion.id == FundCurrentVersion.version_id)
             .order_by(Fund.id)
@@ -361,8 +507,9 @@ class CashflowRepository:
                 base_currency=base_currency,
                 currencies=currencies[version_id],
                 cashflow_count=cashflow_count,
+                version_no=version_no,
             )
-            for fund_id, name, base_currency, version_id, cashflow_count in rows
+            for fund_id, name, base_currency, version_id, cashflow_count, version_no in rows
         ]
 
     # ------------------------------------------------------------------
@@ -392,6 +539,22 @@ class CashflowRepository:
         ).one_or_none()
         if row is None:
             raise UnknownFundError(fund_id)
+        return row[0], row[1]
+
+    def _resolve(self, fund_id: int, version_no: int | None) -> tuple[Fund, int]:
+        """The fund and the version id a read should serve: the published pointer
+        by default, or any retained version by number — history stays queryable."""
+        if version_no is None:
+            return self._current(fund_id)
+        row = self._session.execute(
+            select(Fund, ProjectionVersion.id)
+            .join(ProjectionVersion, ProjectionVersion.fund_id == Fund.id)
+            .where(Fund.id == fund_id, ProjectionVersion.version_no == version_no)
+        ).one_or_none()
+        if row is None:
+            if self._session.get(Fund, fund_id) is None:
+                raise UnknownFundError(fund_id)
+            raise KeyError(f"fund {fund_id} has no version {version_no}")
         return row[0], row[1]
 
 

@@ -5,21 +5,6 @@ from riskview.api import create_app
 from riskview.db.session import create_db_engine
 
 
-@pytest.fixture()
-def client(engine, seeded_repo, session):
-    # seeded_repo committed through `session`, which shares this engine, so the
-    # app's own sessions see the data.
-    session.close()
-    with TestClient(create_app(engine)) as client:
-        yield client
-
-
-@pytest.fixture()
-def empty_client(engine):
-    with TestClient(create_app(engine)) as client:
-        yield client
-
-
 def test_funds_are_listed_with_database_ids(client):
     body = client.get("/funds").json()
     assert [f["fund_id"] for f in body] == [1, 2]
@@ -176,3 +161,68 @@ def test_the_app_refuses_an_unmigrated_database(tmp_path):
     with pytest.raises(RuntimeError, match="alembic upgrade head"), TestClient(create_app(engine)):
         pass
     engine.dispose()
+
+
+# --------------------------------------------------------------------------
+# Versioned reads — revisions mint, no-ops don't, history stays served
+# --------------------------------------------------------------------------
+
+REVISED_ROW = (
+    "2,Fund I,31/12/2025 00:00,Interest,GBP,2500000,2864345,EUR",
+    "2,Fund I,31/12/2025 00:00,Interest,GBP,3000000,3437214,EUR",
+)
+
+
+def _post(client, name: str, data: bytes) -> dict:
+    response = client.post("/ingest", files={"file": (name, data)})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_upload_reports_what_it_did_per_fund(empty_client, sample_csv_path):
+    report = _post(empty_client, "cashflows.csv", sample_csv_path.read_bytes())
+
+    assert [(f["fund_name"], f["action"], f["version_no"]) for f in report["funds"]] == [
+        ("Fund I", "new", 1),
+        ("Fund II", "new", 1),
+    ]
+
+
+def test_revision_mints_only_for_the_changed_fund(empty_client, sample_csv_path):
+    text = sample_csv_path.read_text()
+    first = _post(empty_client, "cashflows.csv", text.encode())
+    original_irr = empty_client.get("/funds/1/irr").json()["fund_irr"]
+
+    report = _post(empty_client, "revised.csv", text.replace(*REVISED_ROW).encode())
+
+    assert [(f["fund_name"], f["action"], f["version_no"]) for f in report["funds"]] == [
+        ("Fund I", "revised", 2),
+        ("Fund II", "unchanged", 1),
+    ]
+    assert report["batch_id"] != first["batch_id"]
+
+    # History: version 1 still serves the pre-revision numbers.
+    assert empty_client.get("/funds/1/irr", params={"version": 1}).json()["fund_irr"] == original_irr
+    assert empty_client.get("/funds/1/irr").json()["fund_irr"] != original_irr
+
+    versions = empty_client.get("/funds/1/versions").json()
+    assert [(v["version_no"], v["is_current"]) for v in versions] == [(1, False), (2, True)]
+    assert [f["version_no"] for f in empty_client.get("/funds").json()] == [2, 1]
+
+
+def test_reordered_upload_mints_nothing(empty_client, sample_csv_path):
+    lines = sample_csv_path.read_text().splitlines()
+    _post(empty_client, "cashflows.csv", sample_csv_path.read_bytes())
+
+    reordered = "\n".join([lines[0], *reversed(lines[1:])])
+    report = _post(empty_client, "reexport.csv", reordered.encode())
+
+    assert report["duplicate"] is False  # different bytes, so a new audit row...
+    assert {f["action"] for f in report["funds"]} == {"unchanged"}  # ...that changed nothing
+    assert [f["version_no"] for f in empty_client.get("/funds").json()] == [1, 1]
+
+
+def test_unknown_version_404_with_a_named_detail(client):
+    response = client.get("/funds/1/nav", params={"version": 99})
+    assert response.status_code == 404
+    assert response.json()["detail"] == "fund 1 has no version 99"

@@ -125,6 +125,11 @@ class ProjectionVersion(Base):
     fund_id: Mapped[int] = mapped_column(ForeignKey("funds.id", ondelete="CASCADE"), index=True)
     batch_id: Mapped[int] = mapped_column(ForeignKey("ingestion_batches.id"), index=True)
     version_no: Mapped[int]
+    # Canonical hash of this version's validated cashflows (see
+    # repository.canonical_content_hash). A new upload mints a version only when
+    # this differs from the current version's — never the version's identity,
+    # which is version_no.
+    content_hash: Mapped[str] = mapped_column(String(64))
     # Denormalised: the only thing GET /funds needs, and it saves fetching every
     # cashflow row per fund just to call len() on them.
     cashflow_count: Mapped[int]

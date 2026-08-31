@@ -28,11 +28,22 @@ To run the service, create the database and load a file into it:
 
 ```bash
 uv run alembic upgrade head                     # create the schema; the only way it is ever created
-uv run riskview ingest samples/cashflows.csv    # 126 accepted, 3 corrected, 0 rejected
+uv run riskview ingest samples/cashflows.csv    # 126 accepted, 3 corrected
 uv run uvicorn riskview.main:app                # serve on :8000
 ```
 
-The database is a local SQLite file (`riskview.db`), overridable with `RISKVIEW_DATABASE_URL`. The API serves `/funds`, `/funds/{id}/irr`, `/funds/{id}/nav`, `/funds/{id}/hedges` and `/ingestions/{batch_id}`; interactive docs at `/docs`. Uploading over HTTP works the same way as the CLI — `curl -F file=@samples/cashflows.csv localhost:8000/ingest` — and posting the same bytes twice is a no-op that returns the original report. The app refuses to start against a database that is behind the migrations, so `alembic upgrade head` is never optional.
+The database is a local SQLite file (`riskview.db`), overridable with `RISKVIEW_DATABASE_URL`. The API serves `/funds`, `/funds/{id}/irr`, `/funds/{id}/nav`, `/funds/{id}/hedges` (each taking `?version=N` for a historical version), `/funds/{id}/versions`, `/funds/{id}/versions/diff?from_version=N`, and `/ingestions/{batch_id}`; interactive docs at `/docs`. Uploading over HTTP works the same way as the CLI — `curl -F file=@samples/cashflows.csv localhost:8000/ingest` — and posting the same bytes twice is a no-op that returns the original report. The app refuses to start against a database that is behind the migrations, so `alembic upgrade head` is never optional.
+
+### Revisions
+
+A revision is a full restatement: re-upload the fund's complete schedule and the upload response says, per fund, whether it was `new`, `revised` (version N+1 minted) or `unchanged`. Change detection is by content, not bytes — a re-export with reordered rows, renumbered ids or a CSV-to-Excel round trip mints nothing — and superseded versions stay readable via `?version=N`, with `/funds/{id}/versions/diff` showing which rows changed and what that did to IRR and the hedge schedule. Two revision samples tell the canonical stories:
+
+```bash
+curl -F file=@samples/cashflows_rev_fx_update.csv localhost:8000/ingest         # Fund I revised, Fund II untouched
+curl "localhost:8000/funds/1/versions/diff?from_version=1"                      # base amounts moved; hedges unchanged
+curl -F file=@samples/cashflows_rev_early_repayment.csv localhost:8000/ingest   # the GBP loan repays 3 years early
+curl "localhost:8000/funds/1/versions/diff?from_version=2"                      # hedge programme shortens
+```
 
 In VS Code both are tasks (⇧⌘P → *Run Task*): **Serve API** and **Sample report**.
 
@@ -64,7 +75,7 @@ Fund I results (base EUR): IRR 9.95% GBP, 7.89% EUR, 12.05% USD, 10.05% fund-lev
 
 - The sample has no deal column, so a position is one (fund, currency) pair, and there's no Deal model in code today — see the design doc for the additive migration to deal-grained feeds.
 - Data lives in SQLite, created and evolved only by Alembic migrations — the application never calls `create_all`, so the migrations are exercised on every test run. Amounts are stored as exact text (SQLite has no exact numeric type) and become `NUMERIC` on PostgreSQL, which is the one dialect-specific choice; see `db/types.py`.
-- Each upload is an immutable projection version per fund, published by moving a pointer as the last step of one transaction, so a file lands whole or not at all and readers never see a partial batch. Re-uploading identical bytes is a no-op keyed on their SHA-256; a corrected file is version N+1 rather than an overwrite.
+- Each upload that changes a fund's schedule is an immutable projection version, published by moving a pointer as the last step of one transaction, so a file lands whole or not at all and readers never see a partial batch. Re-uploading identical bytes is a no-op keyed on their SHA-256; identical content in different bytes is detected by a canonical per-fund content hash and mints nothing; a genuine revision is version N+1 rather than an overwrite, and old versions stay readable.
 - Analytics are computed at ingestion and served from stored rows — reads never run the analytics engine.
 - Currency is a closed set — EUR, GBP, USD, the three the sample feed uses — not the full ISO 4217 list. Any other code is rejected at validation; supporting a new one is a one-line addition to `CurrencyCode`.
 - IRR is XIRR-style: dated flows, actual/365, solved by bisection. Currency-level IRR uses local amounts; fund-level uses base amounts.
@@ -78,3 +89,5 @@ Fund I results (base EUR): IRR 9.95% GBP, 7.89% EUR, 12.05% USD, 10.05% fund-lev
 `samples/cashflows.csv` is the sample cashflow data, used by the commands above and by the tests. It holds two funds across three currencies with quarterly flows 2025–2030, and contains the intentional errors the brief describes: a currency code typo (`GPB`), inconsistent date formats, and stray characters. It ingests as 126 accepted, 3 corrected — the corrections are rows 17, 21 and 51. The numeric formatting the brief also mentions (thousands separators, currency symbols, parenthesised negatives) is not present in this sample but is handled, and covered in `tests/test_validation.py`.
 
 Excel is supported on the same path — `--data file.xlsx` and `POST /ingest` both accept it, and `tests/test_ingestion.py` asserts a workbook ingests identically to the CSV.
+
+Two revision files restate Fund I in full (Fund II is untouched by them, since a batch only replaces the funds it contains): `samples/cashflows_rev_early_repayment.csv` returns the GBP principal on 30/09/2027 instead of 30/09/2030 and drops the interest that no longer accrues, and `samples/cashflows_rev_fx_update.csv` keeps every date and local amount but restates the GBP base amounts at 1.20 EUR/GBP. `tests/test_diff.py` pins what each does to the diff, the IRRs and the hedge schedule.

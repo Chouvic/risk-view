@@ -4,8 +4,10 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
+from riskview.api import create_app
 from riskview.db.alembic_support import upgrade_to_head
 from riskview.db.repository import BatchSource, CashflowRepository
 from riskview.db.session import create_db_engine, create_session_factory
@@ -103,6 +105,21 @@ def seeded_repo(repo, session, sample_result) -> CashflowRepository:
     repo.save_batch(sample_result, _source("seed"))
     session.commit()
     return repo
+
+
+@pytest.fixture()
+def client(engine, seeded_repo, session):
+    # seeded_repo committed through `session`, which shares this engine, so the
+    # app's own sessions see the data.
+    session.close()
+    with TestClient(create_app(engine)) as client:
+        yield client
+
+
+@pytest.fixture()
+def empty_client(engine):
+    with TestClient(create_app(engine)) as client:
+        yield client
 
 
 def _source(marker: object, filename: str = "cashflows.csv") -> BatchSource:

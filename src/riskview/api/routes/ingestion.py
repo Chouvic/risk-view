@@ -46,4 +46,4 @@ def ingestion_report(
         batch = repository.batch(batch_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"unknown ingestion batch: {batch_id}") from None
-    return report_of(batch, duplicate=False)
+    return report_of(batch, duplicate=False, funds=repository.outcomes_of(batch))

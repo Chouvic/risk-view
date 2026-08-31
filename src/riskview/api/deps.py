@@ -13,7 +13,7 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from riskview.db.repository import CashflowRepository
+from riskview.db.repository import CashflowRepository, UnknownFundError
 from riskview.schemas import FundAnalytics
 
 
@@ -36,9 +36,16 @@ def get_repository(session: Annotated[Session, Depends(get_session)]) -> Cashflo
 
 
 def get_fund_analytics(
-    fund_id: int, repository: Annotated[CashflowRepository, Depends(get_repository)]
+    fund_id: int,
+    repository: Annotated[CashflowRepository, Depends(get_repository)],
+    version: int | None = None,
 ) -> FundAnalytics:
+    """Analytics for one fund — the current version by default, any retained
+    version via ?version=N. Declared as a dependency parameter, so every fund
+    read gets the query parameter without repeating it."""
     try:
-        return repository.analytics(fund_id)
-    except KeyError:
+        return repository.analytics(fund_id, version)
+    except UnknownFundError:
         raise HTTPException(status_code=404, detail=f"unknown fund: {fund_id}") from None
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc.args[0])) from None

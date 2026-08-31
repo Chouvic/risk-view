@@ -253,6 +253,25 @@ class IngestionResult(FrozenModel):
         return {"accepted": len(self.cashflows), "corrected": len(self.corrections)}
 
 
+class VersionAction(str, Enum):
+    """What one upload did to one fund's projection ledger."""
+
+    NEW = "new"  # first projection for a fund not seen before
+    REVISED = "revised"  # content changed: version N+1 minted, pointer moved
+    UNCHANGED = "unchanged"  # canonical content hash matched the current version; nothing minted
+
+
+class FundVersionOutcome(FrozenModel):
+    """Per-fund result of one upload — what a supplier reads to see what changed."""
+
+    fund_id: int
+    fund_name: str
+    action: VersionAction
+    version_no: int = Field(
+        description="The version now current for this fund: freshly minted, or pre-existing if unchanged."
+    )
+
+
 class IngestionReport(BaseModel):
     """What happened to one uploaded file — the reconciliation artefact.
 
@@ -270,6 +289,13 @@ class IngestionReport(BaseModel):
     summary: dict[str, int] = Field(description="Counts of accepted and corrected rows.")
     corrections: tuple[RowCorrection, ...] = Field(
         description="Rows that needed an automatic fix before they validated."
+    )
+    funds: tuple[FundVersionOutcome, ...] = Field(
+        (),
+        description=(
+            "What this upload did per fund: new, revised, or unchanged. Re-served reports list only "
+            "the versions the batch minted — unchanged outcomes are not stored."
+        ),
     )
 
 
@@ -301,6 +327,76 @@ class FundSummary(BaseModel):
     base_currency: str
     currencies: list[str] = Field(description="Position currencies, including the base currency if held.")
     cashflow_count: int = Field(description="Validated cashflows currently stored for this fund.")
+    version_no: int = Field(description="The projection version reads serve by default.")
+
+
+class VersionInfo(BaseModel):
+    """One entry of a fund's projection history."""
+
+    version_no: int
+    batch_id: int = Field(description="The upload that minted this version.")
+    created_at: datetime
+    cashflow_count: int
+    content_hash: str = Field(description="Canonical content hash — why this version was (or wasn't) minted.")
+    is_current: bool = Field(description="True for the version reads serve by default.")
+
+
+class CashflowSnapshot(BaseModel):
+    """One cashflow as it appears on one side of a version diff, named by its
+    natural key — row ids are reconciliation metadata and play no part here."""
+
+    currency: str
+    cashflow_date: date
+    cashflow_type: str
+    amount_local: Decimal
+    amount_base: Decimal
+
+
+class CashflowAmountChange(BaseModel):
+    """A cashflow present in both versions whose amounts moved."""
+
+    currency: str
+    cashflow_date: date
+    cashflow_type: str
+    old_amount_local: Decimal
+    new_amount_local: Decimal
+    old_amount_base: Decimal
+    new_amount_base: Decimal
+
+
+class IrrChange(BaseModel):
+    old: float | None = Field(description="None when the position did not exist in the old version.")
+    new: float | None = Field(description="None when the position no longer exists in the new version.")
+
+
+class HedgeChange(BaseModel):
+    """A hedge roll whose recommended notional differs between two versions."""
+
+    sell_currency: str
+    trade_date: date
+    value_date: date
+    old_notional: Decimal | None = Field(description="None when the old version had no trade at this roll.")
+    new_notional: Decimal | None = Field(description="None when the roll disappears in the new version.")
+
+
+class VersionDiff(BaseModel):
+    """What changed between two projection versions — the rows, and what the
+    change did to IRR and the hedge programme."""
+
+    fund_id: int
+    fund_name: str
+    from_version: int
+    to_version: int
+    added: tuple[CashflowSnapshot, ...]
+    removed: tuple[CashflowSnapshot, ...]
+    changed: tuple[CashflowAmountChange, ...]
+    fund_irr: IrrChange
+    currency_irr: dict[str, IrrChange] = Field(
+        description="Only currencies whose IRR actually moved; an unchanged position does not appear."
+    )
+    hedge_changes: tuple[HedgeChange, ...] = Field(
+        description="Only rolls whose notional differs; an unchanged hedge programme is an empty tuple."
+    )
 
 
 class FundIrr(BaseModel):

@@ -19,6 +19,20 @@ def _fund(result: IngestionResult, name: str) -> IngestionResult:
     )
 
 
+def _scaled(result: IngestionResult, name: str) -> IngestionResult:
+    """A genuine revision of one fund: every amount doubled, everything else kept."""
+    return IngestionResult(
+        cashflows=tuple(
+            Cashflow.model_validate(
+                {**cf.model_dump(), "amount_local": cf.amount_local * 2, "amount_base": cf.amount_base * 2}
+            )
+            for cf in result.cashflows
+            if cf.fund_name == name
+        ),
+        corrections=(),
+    )
+
+
 # --------------------------------------------------------------------------
 # The original store contract
 # --------------------------------------------------------------------------
@@ -38,12 +52,16 @@ def test_cashflows_round_trip_exactly(seeded_repo, sample_result):
     assert stored == original
 
 
-def test_reingest_replaces_not_duplicates(seeded_repo, session, sample_result, source):
-    seeded_repo.save_batch(sample_result, source("second upload"))
+def test_reingest_of_identical_content_changes_nothing(seeded_repo, session, sample_result, source):
+    """Same schedule in a different file (new byte hash): recorded as a batch,
+    but no fund gains a version — reingestion never duplicates or churns."""
+    outcome = seeded_repo.save_batch(sample_result, source("second upload"))
     session.commit()
 
+    assert [f.action.value for f in outcome.funds] == ["unchanged", "unchanged"]
     assert seeded_repo.fund_ids() == [1, 2]
     assert len(seeded_repo.cashflows(1)) == 63
+    assert seeded_repo.version_count(1) == 1
 
 
 def test_partial_batch_leaves_other_funds_untouched(seeded_repo, session, sample_result, source):
@@ -98,7 +116,7 @@ def test_analytics_track_the_newest_version(seeded_repo, session, sample_result,
 
 def test_superseded_versions_are_kept(seeded_repo, session, sample_result, source):
     first = seeded_repo.current_version_id(1)
-    seeded_repo.save_batch(sample_result, source("second upload"))
+    seeded_repo.save_batch(_scaled(sample_result, "Fund I"), source("revision"))
     session.commit()
 
     assert seeded_repo.version_count(1) == 2
