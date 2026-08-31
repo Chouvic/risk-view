@@ -50,7 +50,7 @@ def ingest_file(path: str | Path) -> IngestionResult:
 def ingest_into(store: "CashflowStore", data: bytes, filename: str) -> IngestionResult:
     """Parse, validate, and persist a batch — the single write path to storage."""
     result = ingest(data, filename)
-    store.save_batch(result)
+    store.save_batch(result, source_file=filename)
     return result
 
 

@@ -30,6 +30,7 @@ def funds(store: Annotated[CashflowStore, Depends(get_store)]) -> list[FundSumma
                 base_currency=analytics.base_currency,
                 currencies=sorted(analytics.currency_irr),
                 cashflow_count=len(store.cashflows(fund_id)),
+                source_file=store.source_file(fund_id),
             )
         )
     return summaries

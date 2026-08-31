@@ -22,6 +22,13 @@ def test_funds_are_listed_with_database_ids(client):
     assert body[0]["currencies"] == ["EUR", "GBP", "USD"]
 
 
+def test_ingest_records_the_source_file_on_each_fund(empty_client, sample_csv_path):
+    with open(sample_csv_path, "rb") as f:
+        empty_client.post("/ingest", files={"file": ("projections-q3.csv", f)})
+    body = empty_client.get("/funds").json()
+    assert [f["source_file"] for f in body] == ["projections-q3.csv", "projections-q3.csv"]
+
+
 def test_irr(client):
     body = client.get("/funds/1/irr").json()
     assert body["name"] == "Fund I"
