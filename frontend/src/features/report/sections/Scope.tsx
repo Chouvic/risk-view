@@ -1,113 +1,68 @@
 import { ReportSection } from "../ReportShell";
-import { Block, Claim, Code, PairTable, Path, Prose, Takeaway } from "../parts/ui";
+import { Block, Claim, PairTable, Path, Points, Prose } from "../parts/ui";
 
-const RUN = `uv sync                             # install
-uv run pytest                       # the test suite
-uv run python scripts/fund_report.py    # IRRs + NAV schedules for the sample file
-uv run uvicorn riskview.main:app    # the analytics API on :8000
-
-cd frontend && npm install && npm run dev   # this UI on :5173`;
-
-/** Assumptions, omissions and their reasons. */
+/** Assumptions and omissions, with their reasons. */
 export function Scope() {
   return (
     <ReportSection id="scope">
-      <Claim>
-        Every omission here is a decision with a reason. Naming them is what makes “I kept it
-        simple” mean something.
-      </Claim>
+      <Claim>Every omission is a decision. Naming them is what makes “kept it simple” mean something.</Claim>
 
-      <Block title="Assumptions">
-        <PairTable
-          head={["Assumption", "Why, and what it costs"]}
-          rows={[
-            [
-              "The client's base amounts are taken as given",
-              "There is no FX rate source in this build, so the fund-level IRR is solved on the base amounts as supplied. A rate service would replace them and change nothing above the ingestion layer.",
-            ],
-            [
-              "Each position is discounted at its own IRR",
-              "As the brief specifies. This makes the schedule internally consistent — it is the valuation implied by the projection itself, which is exactly why NAV(0) = 0 is a check rather than a coincidence. It is not a market mark.",
-            ],
-            [
-              "A position is a (fund, currency) pair",
-              "The sample feed carries no deal identifier. The migration to real deals is designed in section 03 rather than pre-built against a schema nobody has sent yet.",
-            ],
-            [
-              "actual/365, calendar month-end rolls",
-              "30 Sep + 3m settles 31 Dec. A real desk would roll that to the next business day against a holiday calendar; that is a calendar dependency, not a change to the model.",
-            ],
-            [
-              "Coverage is 100%",
-              "The brief's policy. It is a field on the trade rather than a constant, so moving to 80% is a data change.",
-            ],
-          ]}
-        />
-      </Block>
-
-      <Block title="What a treasurer would say about 100%">
-        <Prose>
-          A correctly working 100% hedge programme still has a cash problem. Forwards settle in cash
-          on their value date; the loan behind them does not. If the currency moves against the
-          hedge, the fund pays out on a contract while the asset it protects is illiquid and years
-          from repayment. That is why real programmes run under full coverage and hold credit lines
-          against the difference. The engine here is right to produce 100% because that is the
-          policy it was given — the point is that the policy belongs in data, and someone has to
-          fund the margin.
-        </Prose>
-      </Block>
+      <Points
+        items={[
+          {
+            point: "Each position is discounted at its own IRR",
+            reason:
+              "As the brief specifies. It is the valuation implied by the projection itself, and internally consistent — not a market mark.",
+          },
+          {
+            point: "Client base amounts are taken as supplied",
+            reason:
+              "There is no FX rate source in this build. A rate service would replace them without touching anything above ingestion.",
+          },
+          {
+            point: "100% coverage is a policy, not a law",
+            reason:
+              "It is a field on the trade. A full hedge still settles in cash while the loan does not, which is why real programmes run under it.",
+          },
+        ]}
+      />
 
       <Block title="Deliberately not built">
         <PairTable
-          head={["Not built", "Reason, and the seam that is already cut"]}
+          head={["Not built", "Reason, and the seam already cut"]}
           rows={[
             [
               "Persistence",
               <>
-                The store is in memory, so a restart loses the data. This is the first thing I would
-                finish: <Path>riskview.store</Path> is already the only module that knows about
-                storage, so a database goes behind it without touching the analytics.
+                The store is in memory, so a restart loses the data. <Path>riskview.store</Path> is
+                the only module that knows about storage, so a database goes behind it untouched.
               </>,
             ],
             [
               "Concurrency control",
-              "Single process, and two simultaneous uploads for one fund are last-write-wins. Correct behaviour needs a version and a compare-and-swap on the pointer — cheap once there is a database, meaningless before it.",
+              "Two simultaneous uploads for one fund are last-write-wins. Correct behaviour needs a version and a compare-and-swap — cheap once there is a database, meaningless before it.",
             ],
             [
-              "Projection versioning and diff",
-              "Designed in section 06 and not implemented on this branch. It is the natural next increment, and it is what makes the revision workflow real rather than illustrative.",
+              "Projection versioning",
+              "Designed in section 06, simulated there in the browser. The natural next increment.",
             ],
             [
               "The executed-hedge ledger",
-              "Section 06 simulates it in the browser. Building it needs a trade capture feed, which is an integration question rather than a modelling one.",
+              "Needs a trade capture feed — an integration question, not a modelling one.",
             ],
             [
-              "Market data and mark-to-market",
-              "No forward curve, so hedge P&L is out of scope. The trades produced are recommendations, sized from exposure.",
-            ],
-            [
-              "Auth, tenancy and rate limits",
-              "Gateway concerns. Putting them in the analytics would make the analytics impure for no benefit.",
+              "Business-day calendars, market data, auth",
+              "Value dates roll month-end to month-end, so 31 Dec settles as-is. Hedge P&L needs a forward curve. Tenancy belongs at the gateway, not in pure analytics.",
             ],
           ]}
         />
       </Block>
 
-      <Block title="Running it">
-        <Code label="from the repository root">{RUN}</Code>
-        <Prose className="mt-3">
-          The API starts empty, so post a file first:{" "}
-          <Path>curl -F file=@samples/cashflows.csv localhost:8000/ingest</Path>. The design document
-          for Parts 1, 2 and 4 is <Path>docs/design.md</Path>; this page is the walkthrough of it.
-        </Prose>
-      </Block>
-
-      <Takeaway>
-        What I would build next, in order: persistence behind the existing store interface, then
-        projection versioning with the content hash, then the executed-hedge ledger and adjustment
-        trades. Each one is a self-contained increment, and none of them requires the analytics to
-        change — which is the strongest evidence that the boundaries are in the right places.
-      </Takeaway>
+      <Prose>
+        Next, in order: persistence behind the existing store interface, then projection versioning,
+        then the executed-hedge ledger. None of them requires the analytics to change — which is the
+        strongest evidence the boundaries are in the right places.
+      </Prose>
     </ReportSection>
   );
 }

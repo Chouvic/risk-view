@@ -54,6 +54,18 @@ export function baseFlows(): Flow[] {
   return CASHFLOWS.map((cf) => ({ date: cf.date, amount: cf.base }));
 }
 
+/**
+ * The coupon schedule read back out of the data, so commentary about it cannot drift.
+ * Each position is a bullet loan: an investment, level quarterly coupons, principal at par.
+ */
+export function couponShape(currency: Currency) {
+  const ordered = [...localFlows(currency)].sort((a, b) => a.date.localeCompare(b.date));
+  const principal = Math.abs(ordered[0].amount);
+  const coupons = ordered.slice(1, -1);
+  const quarterly = (coupons[0]?.amount ?? 0) / principal;
+  return { count: coupons.length, coupon: coupons[0]?.amount ?? 0, compounded: (1 + quarterly) ** 4 - 1 };
+}
+
 export function scheduleFor(currency: Currency) {
   return FUND.navByCurrency[currency as keyof typeof FUND.navByCurrency];
 }

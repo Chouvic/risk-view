@@ -27,15 +27,13 @@ const SCENARIOS: Scenario[] = [
   {
     key: "reexport",
     label: "Re-export, no change",
-    headline:
-      "The client re-sends the same schedule from a different system: reordered rows, renumbered ids, a CSV saved as Excel.",
+    headline: "The same schedule, re-sent from a different system: reordered rows, new bytes.",
     apply: (flows) => [...flows].reverse(),
   },
   {
     key: "early",
     label: "Principal repaid a year early",
-    headline:
-      "The borrower refinances. Principal returns in September 2029 and the last four coupons never arrive.",
+    headline: "The borrower refinances. Principal returns a year early; the last four coupons never arrive.",
     apply: (flows) => {
       const cutoff = "2029-09-30";
       const principal = Math.abs(flows[0].amount);
@@ -49,8 +47,7 @@ const SCENARIOS: Scenario[] = [
   {
     key: "coupon",
     label: "Coupon reset lower",
-    headline:
-      "A rate reset cuts the coupon by 30% from September 2027. The horizon is unchanged; every remaining exposure is smaller.",
+    headline: "A reset cuts the coupon 30% from September 2027. Same horizon, smaller exposure throughout.",
     apply: (flows) => {
       const principal = Math.abs(flows[0].amount);
       return flows.map((f) =>
@@ -115,7 +112,7 @@ export function RevisionLab() {
   return (
     <Panel
       title="Revision against a live hedge book"
-      description="Projections are versioned and replaceable. Executed hedges are facts. A revision therefore produces adjustment trades, not a cancel-and-replace."
+      description="Pick a revision. The new target book is re-solved and compared roll by roll against what is already in the market."
       actions={
         <div className="flex flex-wrap gap-1.5">
           {SCENARIOS.map((option) => (
@@ -233,22 +230,17 @@ export function RevisionLab() {
           </div>
 
           <p className="mt-4 max-w-3xl text-sm leading-relaxed text-ink-2">
-            Adjustment rather than cancel-and-replace: the executed forward stays on the book and a
-            second, smaller trade moves the position to the new target. That keeps transaction costs
-            down and leaves an audit trail that reads in order. Anything inside a{" "}
-            {(TOLERANCE * 100).toFixed(0)}% band waits for the next scheduled roll rather than
-            paying spread to correct a rounding difference, and every recommendation records the
-            projection version it came from.
+            The executed forward stays on the book; a second, smaller trade moves the position to
+            the new target. Anything inside a {(TOLERANCE * 100).toFixed(0)}% band waits for the
+            next scheduled roll rather than paying spread on a rounding difference.
           </p>
         </div>
       ) : (
         <div className="p-5">
           <p className="max-w-3xl text-sm leading-relaxed text-ink-2">
-            Nothing happens, and that is the point. The submission is recorded — it is a fact that
-            the client sent a file — but the canonical content hash is unchanged, so no version is
-            minted, no analytics run and no trade is recommended. Byte-identical retries short-circuit
-            even earlier, on the batch SHA-256. Two hashes, two different jobs: one answers "have I
-            seen these exact bytes?", the other answers "is this actually a different schedule?".
+            Nothing happens, and that is the point. The submission is recorded, but the content hash
+            is unchanged, so no version is minted, no analytics run and no trade is recommended.
+            Identity is content, not bytes — otherwise every re-export churns the book.
           </p>
         </div>
       )}

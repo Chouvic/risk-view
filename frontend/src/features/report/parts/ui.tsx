@@ -185,16 +185,24 @@ export function Takeaway({ children }: { children: ReactNode }) {
   );
 }
 
-export function Grid({ cols = 2, children }: { cols?: 2 | 3; children: ReactNode }) {
+/**
+ * A section's core ideas: three at most, each a claim that stands alone with one line
+ * of reasoning under it. The shape is the editorial rule — if an idea needs a paragraph,
+ * it is two ideas or it is not core.
+ */
+export function Points({ items }: { items: { point: ReactNode; reason: ReactNode }[] }) {
   return (
-    <div
-      className={cn(
-        "grid gap-4",
-        cols === 2 ? "md:grid-cols-2" : "md:grid-cols-2 lg:grid-cols-3",
-      )}
-    >
-      {children}
-    </div>
+    <ol className="grid gap-3 md:grid-cols-3">
+      {items.map((item, index) => (
+        <li key={index} className="rounded-xl border border-hairline bg-surface p-4">
+          <p className="font-mono text-[11px] tabular-nums text-ink-3">
+            {String(index + 1).padStart(2, "0")}
+          </p>
+          <p className="mt-2 text-sm leading-snug font-medium text-ink">{item.point}</p>
+          <p className="mt-1.5 text-sm leading-relaxed text-ink-3">{item.reason}</p>
+        </li>
+      ))}
+    </ol>
   );
 }
 

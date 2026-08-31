@@ -44,11 +44,11 @@ walkthrough.
 ### Case study report
 
 The **Case study report** tab (`/report`) walks the design in the brief's own order: the problem,
-then Parts 1 to 4, then what is deliberately missing. Seven sections, each with live panels rather
-than screenshots — select an entity to see its schema, route a clean or defective batch through the
-pipeline, edit a row and watch the validators run, solve the IRR by bisection, move the valuation
-date through the NAV schedule, size the hedge programme at any coverage ratio, and replay a
-mid-quarter revision against a live hedge book.
+then Parts 1 to 4, then what is deliberately missing. Seven sections, each opening with three core
+ideas and backed by a panel that runs rather than describes — select an entity to see its schema,
+route a clean or defective batch through the pipeline, edit a row and watch the validators run, move
+the valuation date through the NAV schedule, and replay a mid-quarter revision against a live hedge
+book.
 
 The page is static: it reads a dataset generated from the real pipeline instead of calling the API,
 so it presents identically with the backend down. Nothing on it is typed by hand — regenerate after
