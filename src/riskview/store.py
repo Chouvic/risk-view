@@ -1,12 +1,7 @@
 """In-memory store of validated cashflows and their derived analytics.
 
-The problem here is ingestion, validation, and computation — not persistence —
-so batches live in memory. Saving a batch replaces the projections of each fund
-in that batch and leaves other funds untouched; fund ids are assigned on first
-sight and stay stable. Analytics are deterministic functions of the stored
-cashflows, computed on demand and cached per batch. The production step —
-PostgreSQL behind this same interface, with Alembic migrations — is described
-in docs/design.md.
+Batches live in memory because the problem here is validation and computation, not
+persistence; docs/design.md covers the PostgreSQL step behind this same interface.
 """
 
 from riskview.analytics import compute_fund_analytics

@@ -68,13 +68,41 @@ def test_ingest_reports_and_serves(fixture_name, empty_client, request):
     with open(path, "rb") as f:
         response = empty_client.post("/ingest", files={"file": (path.name, f)})
     assert response.status_code == 200
-    assert response.json()["summary"] == {"accepted": 126, "corrected": 3, "rejected": 0}
+    assert response.json()["summary"] == {"accepted": 126, "corrected": 3}
     assert len(empty_client.get("/funds").json()) == 2
 
 
 def test_ingest_bad_csv_422(empty_client):
     response = empty_client.post("/ingest", files={"file": ("bad.csv", b"ID,Fund Name\n1,x")})
     assert response.status_code == 422
+
+
+def test_ingest_duplicate_ids_422_with_readable_detail(empty_client):
+    # The response carries the reason, not Pydantic's raw error dump.
+    rows = (
+        "ID,Fund Name,Date,Cashflow Type,Local Currency,"
+        "Cashflow Amount Local,Cashflow Amount Base,Base Currency\n"
+        "1,Fund I,30/09/2025 00:00,Investment,GBP,-100,-114,EUR\n"
+        "1,Fund I,31/12/2025 00:00,Interest,GBP,10,11,EUR\n"
+    )
+    response = empty_client.post("/ingest", files={"file": ("dupes.csv", rows.encode())})
+    assert response.status_code == 422
+    assert "duplicate cashflow ids in input: [1]" in response.json()["detail"]
+
+
+def test_ingest_rejected_rows_422_lists_every_reject(empty_client):
+    header = (
+        "ID,Fund Name,Date,Cashflow Type,Local Currency,"
+        "Cashflow Amount Local,Cashflow Amount Base,Base Currency"
+    )
+    rows = f"{header}\n1,Fund I,bad-date,Interest,GBP,10,11,EUR\n2,Fund I,30/09/2025 00:00,Investment,XZY,-1,-1,EUR\n"
+    response = empty_client.post("/ingest", files={"file": ("bad-rows.csv", rows.encode())})
+    assert response.status_code == 422
+
+    detail = response.json()["detail"]
+    assert "nothing was ingested" in detail["error"]
+    assert [r["line"] for r in detail["rejects"]] == [2, 3]
+    assert empty_client.get("/funds").json() == []
 
 
 def test_ingest_unsupported_format_422(empty_client):

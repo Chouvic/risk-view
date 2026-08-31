@@ -1,8 +1,6 @@
-"""Format-specific readers: CSV and Excel in, uniform string rows out.
+"""Format-specific readers: CSV and Excel in, uniform {header: raw string} rows out.
 
-Every reader returns the same shape — a list of {header: raw string} dicts — so
-preprocessing and validation are identical regardless of source format. Adding a
-format means adding a reader to _READERS and nothing anywhere else.
+Every reader returns the same shape, so validation is identical regardless of source format.
 """
 
 import csv
@@ -17,7 +15,6 @@ class UnsupportedFormatError(ValueError):
 
 
 def read_rows(data: bytes, filename: str) -> list[dict[str, str]]:
-    """Parse an uploaded file into raw string rows, dispatching on file extension."""
     extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     reader = _READERS.get(extension)
     if reader is None:

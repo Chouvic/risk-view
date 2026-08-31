@@ -1,19 +1,21 @@
-"""All Pydantic models in one module, grouped by role — the single source of
-truth for shapes. ("schemas" = validation/serialisation, the FastAPI ecosystem
-convention; ORM models would live in a db/models.py when persistence is added.)
+"""Every Pydantic model in the app: domain entities, the ingestion report, and API responses."""
 
-A single file is the right size here — the official FastAPI full-stack template
-does the same. When the app grows, the groups below are the natural split lines:
-each service takes its own section (per-domain schemas, the Netflix Dispatch /
-Polar layout) without any renaming.
-"""
-
-from datetime import date
+import re
+from collections import Counter
+from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Annotated
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 # --------------------------------------------------------------------------
 # Shared value types
@@ -21,64 +23,121 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class CurrencyCode(str, Enum):
-    """Currencies the platform trades. A closed set (rather than any 3-letter
-    string) is what turns a typo like "GPB" into a validation error instead
-    of silent bad data. Only the currencies seen in the client feed are
-    listed; add a member here when a new currency actually needs support."""
+    """A closed set, so a typo like "GPB" fails validation instead of becoming bad data."""
 
     EUR = "EUR"
     GBP = "GBP"
     USD = "USD"
 
 
-class FrozenModel(BaseModel):
-    """Base for records that must not change once validated.
-
-    Two reasons, not style: (1) Pydantic does not re-validate on assignment by
-    default, so a mutable record could be edited into a state its own validators
-    reject — freezing closes that hole; (2) validated batches and analytics
-    results are cached and shared (store cache, test fixtures), so one
-    caller mutating an instance would corrupt it for every other reader.
-    Transient carriers with no invariants (RawCashflowRow, API responses) stay
-    plain BaseModel. Note freezing is shallow — it blocks attribute assignment,
-    which is the accident worth preventing.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-
 class CashflowType(str, Enum):
-    """The three cashflow kinds in the source feed."""
-
     INVESTMENT = "Investment"
     INTEREST = "Interest"
     PRINCIPAL_REPAYMENT = "Principal Repayment"
 
 
+class FrozenModel(BaseModel):
+    """Frozen: validated records are cached and shared, and Pydantic does not re-validate on assignment."""
+
+    model_config = ConfigDict(frozen=True)
+
+
 # --------------------------------------------------------------------------
-# Domain entities — the business objects every service speaks
+# Input cleaning — fix only what is unambiguous, record every fix on the list
+# passed as validation context, and let anything else fail validation.
+# --------------------------------------------------------------------------
+
+JUNK_CHARS = "`'\" "
+
+# Known source-system typos only; an unmapped bad code is rejected, not guessed.
+CURRENCY_ALIASES = {"GPB": "GBP", "EURO": "EUR", "UDS": "USD"}
+
+# A whitelist, because "03/04/2026" is a different day under day-first and month-first
+# conventions and the convention comes from the source contract, never a guess.
+DATE_FORMATS = ("%d/%m/%Y", "%Y-%m-%d")
+
+
+def _note(info: ValidationInfo, message: str) -> None:
+    if isinstance(info.context, list):
+        info.context.append(f"{info.field_name}: {message}")
+
+
+def _scrub(value: Any, info: ValidationInfo) -> Any:
+    """Strip junk characters and collapse whitespace; non-strings (a typed Excel cell) pass through."""
+    if not isinstance(value, str):
+        return value
+    cleaned = re.sub(r"\s+", " ", value.strip().strip(JUNK_CHARS).strip())
+    if cleaned != value:
+        _note(info, f"scrubbed {value!r} -> {cleaned!r}")
+    return cleaned
+
+
+# --------------------------------------------------------------------------
+# Domain entities
 # --------------------------------------------------------------------------
 
 
 class Cashflow(FrozenModel):
-    """A validated projected cashflow for one fund position.
-
-    Sign convention: outflows (Investment) are negative, inflows (Interest,
-    Principal Repayment) are positive — enforced below.
-    """
+    """A validated projected cashflow for one fund position."""
 
     id: int = Field(description="Row id from the client feed, kept for reconciliation with the source file.")
-    fund_name: str = Field(description="Name of the fund this cashflow belongs to.")
-    cashflow_date: date = Field(description="Calendar date the cashflow occurs.")
-    cashflow_type: CashflowType = Field(description="Investment, Interest, or Principal Repayment.")
-    currency: CurrencyCode = Field(description="Local currency of the cashflow amount.")
-    amount_local: Decimal = Field(
-        description="Amount in the local currency; negative for outflows, positive for inflows."
-    )
-    amount_base: Decimal = Field(
-        description="Amount converted to the fund's base currency, as supplied by the client."
-    )
+    fund_name: str = Field(min_length=1)
+    cashflow_date: date
+    cashflow_type: CashflowType
+    currency: CurrencyCode = Field(description="Local currency of the cashflow.")
+    amount_local: Decimal = Field(description="Negative for outflows, positive for inflows.")
+    amount_base: Decimal = Field(description="Client-supplied conversion to the fund's base currency.")
     base_currency: CurrencyCode = Field(description="The fund's reporting currency.")
+
+    @field_validator("fund_name", "cashflow_type", mode="before")
+    @classmethod
+    def _clean_text(cls, value: Any, info: ValidationInfo) -> Any:
+        return _scrub(value, info)
+
+    @field_validator("currency", "base_currency", mode="before")
+    @classmethod
+    def _clean_currency(cls, value: Any, info: ValidationInfo) -> Any:
+        """An unknown code is passed through unchanged, for CurrencyCode itself to reject."""
+        code = _scrub(value, info)
+        if not isinstance(code, str):
+            return code
+        if code != code.upper():
+            _note(info, f"uppercased {code!r}")
+            code = code.upper()
+        if code in CURRENCY_ALIASES:
+            _note(info, f"corrected typo {code!r} -> {CURRENCY_ALIASES[code]!r}")
+            code = CURRENCY_ALIASES[code]
+        return code
+
+    @field_validator("cashflow_date", mode="before")
+    @classmethod
+    def _clean_date(cls, value: Any, info: ValidationInfo) -> Any:
+        text = _scrub(value, info)
+        if not isinstance(text, str):
+            return text
+        day = re.split(r"[ T]", text, maxsplit=1)[0]
+        for fmt in DATE_FORMATS:
+            try:
+                # Naive: cashflow dates are calendar dates, not instants.
+                return datetime.strptime(day, fmt).date()  # noqa: DTZ007
+            except ValueError:
+                continue
+        raise ValueError("unrecognised date format, expected day-first DD/MM/YYYY or ISO YYYY-MM-DD")
+
+    @field_validator("amount_local", "amount_base", mode="before")
+    @classmethod
+    def _clean_amount(cls, value: Any, info: ValidationInfo) -> Any:
+        text = _scrub(value, info)
+        if not isinstance(text, str):
+            return text
+        text = text.replace(" ", "")
+        if text.startswith("(") and text.endswith(")"):
+            _note(info, f"read parenthesised {value!r} as negative")
+            text = f"-{text[1:-1]}"
+        stripped = re.sub(r"[,€£$]", "", text)
+        if stripped != text:
+            _note(info, f"normalised {value!r} -> {stripped!r}")
+        return stripped
 
     @model_validator(mode="after")
     def _check_signs_and_base(self) -> "Cashflow":
@@ -95,169 +154,131 @@ class Cashflow(FrozenModel):
 
 
 class NavPoint(FrozenModel):
-    """NAV at one schedule date. By construction NAV(0) = 0 and NAV at the final
-    date equals the position's terminal value — the brief's two sanity checks."""
-
-    date: Annotated[date, Field(description="Schedule date this point represents.")]
-    nav: Decimal = Field(
-        description="Present value, at this date, of cashflows dated on or after it, discounted at the position's IRR."
-    )
+    date: date
+    nav: Decimal = Field(description="PV at this date of cashflows dated on or after it.")
     open_exposure: Decimal = Field(
-        description="Present value of cashflows dated strictly after this date — the exposure a hedge must still cover."
+        description="PV of cashflows dated strictly after this date — what a hedge must cover."
     )
 
 
 class NavSchedule(FrozenModel):
-    """NAV per schedule date for one fund position (or the whole fund in base currency)."""
-
-    fund_name: str = Field(description="Fund this schedule belongs to.")
+    fund_name: str
     currency: CurrencyCode = Field(
         description="Position currency; the fund's base currency for the fund-level schedule."
     )
-    irr: float = Field(
-        description="The position's internal rate of return — the discount rate for every point below."
-    )
-    points: tuple[NavPoint, ...] = Field(description="One point per cashflow date, in chronological order.")
+    irr: float = Field(description="The discount rate applied to every point below.")
+    points: tuple[NavPoint, ...] = Field(description="One point per cashflow date, chronological.")
 
 
 class FxForwardTrade(FrozenModel):
-    """A recommended FX forward: sell the exposure currency, buy the fund's base currency, rolled every 3 months."""
+    """A recommended FX forward: sell the exposure currency, buy the fund's base currency."""
 
-    fund_name: str = Field(description="Fund the hedge is recommended for.")
-    trade_date: date = Field(description="Date the forward is entered into — a NAV schedule date.")
-    value_date: date = Field(description="Settlement date, three months after the trade date.")
-    sell_currency: CurrencyCode = Field(
-        description="Currency sold forward — the fund's non-base exposure currency."
-    )
-    buy_currency: CurrencyCode = Field(description="Currency bought forward — the fund's base currency.")
-    notional_sell: Decimal = Field(
-        description="Amount of sell_currency hedged: coverage_ratio times the open exposure at the trade date."
-    )
-    coverage_ratio: float = Field(
-        1.0, description="Fraction of the open exposure hedged; 1.0 covers it in full."
-    )
-
-
-# --------------------------------------------------------------------------
-# Ingestion boundary — raw input and the ingestion outcome
-# --------------------------------------------------------------------------
-
-
-class RawCashflowRow(BaseModel):
-    """One source row, verbatim. All strings; cleaning happens before Cashflow validation."""
-
-    id: str
     fund_name: str
-    date: str
-    cashflow_type: str
-    local_currency: str
-    amount_local: str
-    amount_base: str
-    base_currency: str
+    trade_date: date
+    value_date: date = Field(description="Settlement date, three months after the trade date.")
+    sell_currency: CurrencyCode = Field(description="The fund's non-base exposure currency.")
+    buy_currency: CurrencyCode = Field(description="The fund's base currency.")
+    notional_sell: Decimal = Field(
+        description="coverage_ratio times the open exposure at the trade date."
+    )
+    coverage_ratio: float = Field(1.0, description="Fraction of the open exposure hedged.")
+
+
+# --------------------------------------------------------------------------
+# Ingestion boundary
+# --------------------------------------------------------------------------
 
 
 class RowCorrection(FrozenModel):
-    """A row that was accepted after an unambiguous automatic fix."""
-
-    line: int = Field(description="Line number in the source file.")
+    line: int
     row_id: str = Field(description="Row id as supplied in the source file.")
-    corrections: tuple[str, ...] = Field(
-        description="Each fix applied, e.g. a currency alias resolved or a date format normalised."
-    )
+    corrections: tuple[str, ...] = Field(description="Each fix applied to the row.")
+
+
+def describe_errors(exc: ValidationError) -> tuple[str, ...]:
+    """Append the offending value, which Pydantic's message omits and the data supplier needs."""
+    reasons = []
+    for error in exc.errors():
+        if error["loc"]:
+            location = ".".join(str(part) for part in error["loc"])
+            reasons.append(f"{location}: {error['msg']} (got {error['input']!r})")
+        else:
+            reasons.append(str(error["msg"]))
+    return tuple(reasons)
 
 
 class RowReject(FrozenModel):
-    """A row that could not be validated; kept for reconciliation with the data supplier."""
-
-    line: int = Field(description="Line number in the source file.")
+    line: int
     row_id: str = Field(description="Row id as supplied in the source file.")
-    errors: tuple[str, ...] = Field(description="Each validation failure that caused the row to be rejected.")
+    errors: tuple[str, ...] = Field(description="Each validation failure that caused the rejection.")
+
+    @classmethod
+    def from_validation_error(cls, line: int, row_id: str, exc: ValidationError) -> "RowReject":
+        return cls(line=line, row_id=row_id, errors=describe_errors(exc))
 
 
 class IngestionResult(FrozenModel):
-    """Validated records plus a full account of what was fixed or dropped."""
+    """A whole validated batch. Rejects are not represented: a batch with any is never built."""
 
     cashflows: tuple[Cashflow, ...] = Field(description="Rows that passed validation, corrected or not.")
-    corrections: tuple[RowCorrection, ...] = Field(
-        description="Rows that needed an automatic fix before they validated."
-    )
-    rejects: tuple[RowReject, ...] = Field(description="Rows that failed validation and were dropped.")
+    corrections: tuple[RowCorrection, ...]
+
+    @model_validator(mode="after")
+    def _check_unique_ids(self) -> "IngestionResult":
+        """A repeated row id means a broken file rather than a bad row, so the whole batch fails."""
+        counts = Counter(cashflow.id for cashflow in self.cashflows)
+        duplicates = sorted(row_id for row_id, count in counts.items() if count > 1)
+        if duplicates:
+            raise ValueError(f"duplicate cashflow ids in input: {duplicates}")
+        return self
 
     def summary(self) -> dict[str, int]:
-        return {
-            "accepted": len(self.cashflows),
-            "corrected": len(self.corrections),
-            "rejected": len(self.rejects),
-        }
+        return {"accepted": len(self.cashflows), "corrected": len(self.corrections)}
 
 
 # --------------------------------------------------------------------------
-# Analytics output — the full derived picture for one fund
+# Analytics output
 # --------------------------------------------------------------------------
 
 
 class FundAnalytics(FrozenModel):
-    """The full derived picture for one fund: IRR, NAV schedules, and hedge recommendations."""
-
-    fund_id: int = Field(description="Store-assigned fund id.")
-    fund_name: str = Field(description="Fund name.")
-    base_currency: str = Field(description="The fund's reporting currency.")
+    fund_id: int
+    fund_name: str
+    base_currency: str
     fund_irr: float = Field(description="IRR across the fund's base-currency cashflows.")
-    currency_irr: dict[str, float] = Field(description="IRR per position currency, keyed by ISO 4217 code.")
-    nav_schedules: dict[str, NavSchedule] = Field(
-        description="NAV schedule per position currency, in local-currency terms."
-    )
-    fund_nav_schedule: NavSchedule = Field(
-        description="NAV schedule for the whole fund, in base-currency terms."
-    )
-    hedges: tuple[FxForwardTrade, ...] = Field(
-        description="Recommended FX forward trades across all non-base exposures."
-    )
+    currency_irr: dict[str, float] = Field(description="IRR per position currency.")
+    nav_schedules: dict[str, NavSchedule] = Field(description="Per position currency, in local terms.")
+    fund_nav_schedule: NavSchedule = Field(description="Whole fund, in base-currency terms.")
+    hedges: tuple[FxForwardTrade, ...]
 
 
 # --------------------------------------------------------------------------
-# API responses — the wire contract, where it differs from the domain shape.
-# Entities shaped exactly like their response (NavSchedule, FxForwardTrade)
-# are served directly; a class here would be duplication with no seam.
+# API responses. Entities already shaped like their response (NavSchedule,
+# FxForwardTrade) are served directly rather than duplicated here.
 # --------------------------------------------------------------------------
 
 
 class FundSummary(BaseModel):
-    """One row of the /funds listing."""
-
-    fund_id: int = Field(description="Store-assigned fund id.")
-    name: str = Field(description="Fund name.")
-    base_currency: str = Field(description="The fund's reporting currency.")
-    currencies: list[str] = Field(
-        description="Position currencies for this fund; the base currency is included if the fund holds a base-currency position."
-    )
-    cashflow_count: int = Field(description="Number of validated cashflows currently stored for this fund.")
+    fund_id: int
+    name: str
+    base_currency: str
+    currencies: list[str] = Field(description="Position currencies, including the base currency if held.")
+    cashflow_count: int = Field(description="Validated cashflows currently stored for this fund.")
 
 
 class FundIrr(BaseModel):
-    """IRR breakdown for one fund."""
-
-    fund_id: int = Field(description="Store-assigned fund id.")
-    name: str = Field(description="Fund name.")
-    base_currency: str = Field(description="The fund's reporting currency.")
+    fund_id: int
+    name: str
+    base_currency: str
     fund_irr: float = Field(description="IRR across the fund's base-currency cashflows.")
-    currency_irr: dict[str, float] = Field(description="IRR per position currency, keyed by ISO 4217 code.")
+    currency_irr: dict[str, float] = Field(description="IRR per position currency.")
 
 
 class NavBundle(BaseModel):
-    """Fund-level NAV in base currency plus each per-currency schedule."""
-
-    fund: NavSchedule = Field(description="NAV schedule for the whole fund, in base-currency terms.")
-    by_currency: dict[str, NavSchedule] = Field(
-        description="NAV schedule per position currency, in local-currency terms."
-    )
+    fund: NavSchedule = Field(description="Whole fund, in base-currency terms.")
+    by_currency: dict[str, NavSchedule] = Field(description="Per position currency, in local terms.")
 
 
 class IngestionReport(BaseModel):
-    """Response for POST /ingest: what was accepted, fixed, or dropped."""
-
-    summary: dict[str, int] = Field(description="Counts of accepted, corrected, and rejected rows.")
-    corrections: tuple[RowCorrection, ...] = Field(
-        description="Rows that needed an automatic fix before they validated."
-    )
-    rejects: tuple[RowReject, ...] = Field(description="Rows that failed validation and were dropped.")
+    summary: dict[str, int] = Field(description="Counts of accepted and corrected rows.")
+    corrections: tuple[RowCorrection, ...]

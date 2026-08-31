@@ -82,7 +82,7 @@ Data lives in memory today — the priority was the analytics, not persistence �
 
 ```mermaid
 flowchart LR
-    A[Client file upload<br/>CSV / Excel] --> B[Ingestion<br/>read → clean → validate]
+    A[Client file upload<br/>CSV / Excel] --> B[Ingestion<br/>read → validate against the model]
     B -->|corrections & rejects| R[Ingestion report]
     B -->|validated batch vN| C[(Store)]
     C --> D[Analytics<br/>IRR → NAV → hedges]
@@ -100,7 +100,7 @@ A file upload triggers ingestion; a validated batch makes analytics for the affe
 
 | Layer | Package | Role |
 |---|---|---|
-| Ingestion | `riskview.ingestion` | CSV/Excel readers, cleaning, validation; the only place dirty data exists |
+| Ingestion | `riskview.ingestion` | CSV/Excel readers; maps source headers onto model fields and validates each row; the only place dirty data exists |
 | Analytics | `riskview.analytics` | pure functions from cashflows to IRR, NAV and hedges; no I/O |
 | Serving | `riskview.api` + `riskview.store` | the ingest endpoint plus read-only views over stored results; in-memory today, PostgreSQL behind the same interface in production |
 
@@ -108,7 +108,13 @@ Shared shapes live in `riskview.schemas` and `riskview.main` wires everything to
 
 ### Dirty data handling
 
-Fix only what is unambiguous, and record every fix: stray characters, known date formats, thousands separators, a short map of known currency typos (`GPB→GBP`). Anything else is rejected row by row with a reason; one bad row never blocks the batch, and the accepted/corrected/rejected report goes back to the data supplier. Date formats are a fixed whitelist because `03/04/2026` reads differently under day-first and month-first conventions — the convention comes from the source contract and is never guessed.
+Cleaning and validation are one step, not two. The `Cashflow` model does all of it: `@field_validator(..., mode="before")` methods normalise the raw client value, the field's own type coerces it and checks it against the closed sets, and a `@model_validator(mode="after")` checks the invariants that span fields — signs, and local against base. Ingestion has no cleaning code of its own: it maps the source headers onto model fields and calls `Cashflow.model_validate(row, context=fixes)`. That matters beyond tidiness, because a cleaning stage sitting in front of a model is a second place for the rules to live and drift from.
+
+Fix only what is unambiguous, and record every fix: stray characters, known date formats, thousands separators, a short map of known currency typos (`GPB→GBP`). Fixes are appended to the list passed as the validation context, so an accepted row still reports exactly what changed. Date formats are a fixed whitelist because `03/04/2026` reads differently under day-first and month-first conventions — the convention comes from the source contract and is never guessed.
+
+Anything not unambiguously fixable fails validation, and **a batch is all-or-nothing**. Every bad row is collected first, with Pydantic's reason and the offending value, and only then is the batch refused — so the supplier sees every problem in one pass rather than fixing the file one row per round trip. Nothing is stored and no analytics run.
+
+Partial acceptance was the alternative and is the wrong trade here. A fund's IRR and NAV schedule are computed from all of its cashflows, so dropping six bad rows out of 126 does not yield an incomplete answer — it yields a confident, plausible, wrong one, served to a client-facing app with no signal that anything is missing. Refusing the batch turns a silent data-quality problem into a loud one, at the cost of a re-send. A missing column and a repeated row id fail the file the same way, just earlier — the first before validation starts, the second as a validator on `IngestionResult`.
 
 ### Idempotency
 
@@ -118,8 +124,12 @@ Ingestion is a pure function of the file bytes, and saving a batch replaces each
 
 ```
 on cashflow_file_uploaded(file):
-    result = ingest(file)                     # rows → clean → validate → {accepted, corrected, rejected}
-    if result.rejects: notify(supplier, result.rejects)
+    try:
+        result = ingest(file)                 # read → validate; all-or-nothing
+    except IngestionRejected as rejected:
+        notify(supplier, rejected.rejects)    # every bad row, with its reason
+        return                                # nothing stored, no analytics run
+
     version = store.save_batch(result.cashflows)          # immutable projection version
     for fund in funds_in(result):
         analytics = compute(fund, store.cashflows(fund, version))   # IRR → NAV → hedges, pure

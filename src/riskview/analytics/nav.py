@@ -1,13 +1,7 @@
 """NAV schedule construction.
 
-NAV(t) = PV, at t, of all cashflows dated >= t, discounted at the position's IRR.
-By construction NAV(first date) = 0 (the IRR makes total NPV zero) and NAV at the
-final date equals the terminal cashflow — two properties the tests assert as
-sanity checks.
-
-open_exposure(t) = PV of cashflows dated strictly > t: the value still at risk once
-day-t flows have settled. This is the number a hedge must cover (at t=0 it equals
-the invested amount; at the final date it is zero).
+NAV(t) = PV at t of cashflows dated >= t, discounted at the position's IRR.
+open_exposure(t) = PV of cashflows dated strictly > t, the value a hedge must cover.
 """
 
 from datetime import date

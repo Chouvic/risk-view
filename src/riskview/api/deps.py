@@ -1,10 +1,4 @@
-"""Shared route dependencies.
-
-Routes take these with `Depends`, so they declare what they need as a
-parameter instead of reaching into the request. `get_fund_analytics` resolves
-`fund_id` from the path and turns an unknown fund into a 404 once, here,
-rather than in each route that looks one up.
-"""
+"""Shared route dependencies, so an unknown fund becomes a 404 once here rather than in every route."""
 
 from typing import Annotated
 

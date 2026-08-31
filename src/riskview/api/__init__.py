@@ -1,8 +1,4 @@
-"""FastAPI app factory: routes wired around whatever store is supplied.
-
-Assembly (building the store) lives in riskview.main, the composition root —
-this factory stays identical for the real app and tests.
-"""
+"""FastAPI app factory: routes wired around whatever store is supplied, so tests and main share it."""
 
 from fastapi import FastAPI
 

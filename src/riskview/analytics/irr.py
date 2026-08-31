@@ -1,7 +1,6 @@
 """Dated (XIRR-style) NPV and IRR on an actual/365 day count.
 
-Solved by bisection: slower than Newton but immune to bad starting points and
-derivative blow-ups, which matters more than speed at this scale.
+Bisection rather than Newton: slower, but immune to bad starting points at this scale.
 """
 
 from datetime import date
@@ -15,14 +14,7 @@ _MAX_ITERATIONS = 200
 
 
 class CashflowPoint(NamedTuple):
-    """A (date, amount) pair — the minimal input a discounting problem needs.
-
-    Not a domain model: xnpv/xirr are generic financial math, independent of
-    what produced the numbers (a Cashflow's local or base amount, either
-    works). A NamedTuple rather than a Pydantic model because this is an
-    internal computation shape that never crosses a boundary — nothing here
-    needs validating, only naming.
-    """
+    """A dated amount. Not a domain model: xnpv/xirr are generic math over any amount column."""
 
     date: date
     amount: float

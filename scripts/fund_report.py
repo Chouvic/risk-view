@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from riskview.analytics import compute_fund_analytics
-from riskview.ingestion import ingest_file
+from riskview.ingestion import IngestionRejected, ingest_file
 
 DEFAULT_DATA = Path(__file__).resolve().parents[1] / "samples" / "cashflows.csv"
 
@@ -28,10 +28,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
-    result = ingest_file(args.data)
+    try:
+        result = ingest_file(args.data)
+    except IngestionRejected as exc:
+        print(f"{exc}:", file=sys.stderr)
+        for reject in exc.rejects:
+            print(f"  line {reject.line} (id {reject.row_id}): {'; '.join(reject.errors)}", file=sys.stderr)
+        sys.exit(1)
 
     summary = result.summary()
-    print(f"Ingestion: {summary['accepted']} accepted, {summary['corrected']} corrected, {summary['rejected']} rejected")
+    print(f"Ingestion: {summary['accepted']} accepted, {summary['corrected']} corrected")
 
     fund_names = sorted({cf.fund_name for cf in result.cashflows})
     if args.fund:

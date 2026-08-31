@@ -31,15 +31,19 @@ Three layers behind shared Pydantic schemas; the pipeline from the design doc is
 
 ```
 src/riskview/
-├── schemas.py    # all Pydantic models: domain entities, ingestion report, API responses
-├── ingestion/    # readers (CSV/Excel) → cleaning → validation; the only place dirty data exists
+├── schemas.py    # all Pydantic models: the validation contract, domain entities, API responses
+├── ingestion/    # readers (CSV/Excel) → Cashflow.model_validate → an all-or-nothing batch
 ├── analytics/    # pure functions: cashflows → IRR → NAV schedule → hedge recommendations
 ├── store.py      # in-memory store of batches + cached analytics (persistence is a design-doc step)
 ├── api/          # FastAPI app: the /ingest endpoint plus read endpoints over the store
 └── main.py       # composition root
 ```
 
-Dirty data is fixed only where the fix is unambiguous (stray characters, known date formats, known typos like `GPB→GBP`), every fix is recorded, and everything else is rejected row by row with a reason. The sample loads as 126 accepted, 3 corrected, 0 rejected.
+Validation is the Pydantic models, not a pipeline in front of them. `Cashflow` carries `mode="before"` field validators that clean the raw client value, plain domain types that coerce and check it, and a model validator for the invariants that span fields, so ingestion maps the source headers onto model fields and calls `Cashflow.model_validate(row, context=fixes)` — there is no separate cleaning stage to keep in sync.
+
+Dirty data is fixed only where the fix is unambiguous (stray characters, known date formats, thousands separators, known typos like `GPB→GBP`). Every fix is appended to the validation context, so an accepted row still reports exactly what changed.
+
+Anything else fails validation, and a batch is all-or-nothing: every bad row is collected with its reason, then the whole file is refused and nothing is stored. A fund's IRR and NAV are computed from all of its cashflows, so ingesting 120 of 126 rows would not produce an incomplete answer — it would produce a confident wrong one. The supplier gets the full list of failures in one pass and re-sends the file. The sample loads as 126 accepted, 3 corrected.
 
 Fund I results (base EUR): IRR 9.95% GBP, 7.89% EUR, 12.05% USD, 10.05% fund-level. The NAV schedules satisfy both sanity checks from the brief — NAV(0) = 0 and NAV at the final date equals the terminal value — asserted in `tests/test_nav.py`.
 
@@ -56,6 +60,6 @@ Fund I results (base EUR): IRR 9.95% GBP, 7.89% EUR, 12.05% USD, 10.05% fund-lev
 
 ## Data
 
-`samples/cashflows.csv` is the sample cashflow data, used by the commands above and by the tests. It holds two funds across three currencies with quarterly flows 2025–2030, and contains the intentional errors the brief describes: a currency code typo, inconsistent date formats, and numeric formatting issues. It ingests as 126 accepted, 3 corrected, 0 rejected.
+`samples/cashflows.csv` is the sample cashflow data, used by the commands above and by the tests. It holds two funds across three currencies with quarterly flows 2025–2030, and contains the intentional errors the brief describes: a currency code typo (`GPB`), inconsistent date formats, and stray characters. It ingests as 126 accepted, 3 corrected — the corrections are rows 17, 21 and 51. The numeric formatting the brief also mentions (thousands separators, currency symbols, parenthesised negatives) is not present in this sample but is handled, and covered in `tests/test_validation.py`.
 
 Excel is supported on the same path — `--data file.xlsx` and `POST /ingest` both accept it, and `tests/test_ingestion.py` asserts a workbook ingests identically to the CSV.
