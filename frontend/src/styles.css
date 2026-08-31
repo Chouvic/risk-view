@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+/* Design tokens: one light theme, consumed as Tailwind utilities. */
+@theme {
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* Surfaces */
+  --color-plane: #f7f7f6;
+  --color-surface: #ffffff;
+  --color-subtle: #fafaf9;
+
+  /* Ink */
+  --color-ink: #0b0b0b;
+  --color-ink-2: #52514e;
+  --color-ink-3: #8b8985;
+
+  /* Lines */
+  --color-hairline: #e6e5e0;
+  --color-grid: #eeede8;
+
+  /* Accent + status */
+  --color-accent: #2a78d6;
+  --color-accent-soft: #eaf2fd;
+  --color-good: #0ca30c;
+  --color-warning: #fab219;
+  --color-critical: #d03b3b;
+
+  /* Categorical series (validated: CVD ΔE 9.2, normal-vision ΔE 27.6 on white) */
+  --color-series-1: #2a78d6;
+  --color-series-2: #eb6834;
+  --color-series-3: #1baf7a;
+  --color-series-4: #eda100;
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  @apply bg-plane text-ink font-sans antialiased;
+}
+
+/* Recharts draws its own focus outline on the wrapper; we supply our own. */
+.recharts-wrapper:focus,
+.recharts-surface:focus {
+  outline: none;
+}

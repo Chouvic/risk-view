@@ -24,15 +24,17 @@ uv run python scripts/fund_report.py            # validate a cashflow file, prin
 
 The report script reads `samples/cashflows.csv` by default (see [Data](#data)) and takes `--data path/to/file.csv|.xlsx`, `--fund NAME` and `--currency CCY`. It never touches the database, so a client file can be checked before anyone decides to ingest it.
 
-To run the service, create the database and load a file into it:
+To run the service, create the database, load a file into it, and start the two servers:
 
 ```bash
 uv run alembic upgrade head                     # create the schema; the only way it is ever created
 uv run riskview ingest samples/cashflows.csv    # 126 accepted, 3 corrected
-uv run uvicorn riskview.main:app                # serve on :8000
+uv run uvicorn riskview.main:app                # serve the API on :8000
+
+cd frontend && npm install && npm run dev       # the web UI on :5173
 ```
 
-The database is a local SQLite file (`riskview.db`), overridable with `RISKVIEW_DATABASE_URL`. The API serves `/funds`, `/funds/{id}/irr`, `/funds/{id}/nav`, `/funds/{id}/hedges` (each taking `?version=N` for a historical version), `/funds/{id}/versions`, `/funds/{id}/versions/diff?from_version=N`, and `/ingestions/{batch_id}`; interactive docs at `/docs`. Uploading over HTTP works the same way as the CLI — `curl -F file=@samples/cashflows.csv localhost:8000/ingest` — and posting the same bytes twice is a no-op that returns the original report. The app refuses to start against a database that is behind the migrations, so `alembic upgrade head` is never optional.
+The database is a local SQLite file (`riskview.db`), overridable with `RISKVIEW_DATABASE_URL`. The API serves `/funds`, `/funds/{id}/irr`, `/funds/{id}/nav`, `/funds/{id}/hedges` (each taking `?version=N` for a historical version), `/funds/{id}/versions`, `/funds/{id}/versions/diff?from_version=N`, and `/ingestions/{batch_id}`; interactive docs at `/docs`. `/funds` also returns each fund's current `version_no` and the `source_file` that version was ingested from. Uploading over HTTP works the same way as the CLI — `curl -F file=@samples/cashflows.csv localhost:8000/ingest` — and posting the same bytes twice is a no-op that returns the original report. The app refuses to start against a database that is behind the migrations, so `alembic upgrade head` is never optional.
 
 ### Revisions
 
@@ -45,7 +47,33 @@ curl -F file=@samples/cashflows_rev_early_repayment.csv localhost:8000/ingest   
 curl "localhost:8000/funds/1/versions/diff?from_version=2"                      # hedge programme shortens
 ```
 
-In VS Code both are tasks (⇧⌘P → *Run Task*): **Serve API** and **Sample report**.
+The UI reads the same routes: it shows the version each fund is on, lets you pin any earlier version, and renders the diff between two versions.
+
+The UI proxies `/api` to the backend, so start the API first and open <http://localhost:5173>.
+
+In VS Code these are tasks (⇧⌘P → *Run Task*): **Serve API**, **Serve UI**, **Serve API + UI** and
+**Sample report**.
+
+## Web UI
+
+`frontend/` is a React + TypeScript app (Vite, Tailwind, Recharts) over the same API. Three routes,
+each with its own URL: `/funds` lists the funds, `/funds/:id` is one fund top to bottom — overview,
+returns, NAV and hedges, scoped by a currency filter — and `/data` handles ingestion, since a file
+can carry several funds and a fund only names the file it came from.
+
+Metric names carry a dotted underline: hovering one gives the definition and the convention behind
+it, from `src/lib/glossary.ts`. Tables sort on any column. A currency keeps its colour throughout, so
+filtering never repaints a series.
+
+```
+frontend/src/
+├── api/          # the only place that talks HTTP: client + TypeScript mirrors of the schemas
+├── pages/        # one per route
+├── features/     # the pieces those pages are built from
+├── components/   # ui/ primitives and charts/ wrappers
+├── hooks/        # data loading
+└── lib/          # formatting, colours, axis ticks, sorting, the glossary
+```
 
 ## Approach
 

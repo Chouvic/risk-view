@@ -1,8 +1,12 @@
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
 from riskview.api import create_app
 from riskview.db.session import create_db_engine
+
+REV_FX_UPDATE = Path(__file__).resolve().parents[1] / "samples" / "cashflows_rev_fx_update.csv"
 
 
 def test_funds_are_listed_with_database_ids(client):
@@ -11,6 +15,29 @@ def test_funds_are_listed_with_database_ids(client):
     assert [f["name"] for f in body] == ["Fund I", "Fund II"]
     assert body[0]["base_currency"] == "EUR"
     assert body[0]["currencies"] == ["EUR", "GBP", "USD"]
+
+
+def test_ingest_records_the_source_file_on_each_fund(empty_client, sample_csv_path):
+    with open(sample_csv_path, "rb") as f:
+        empty_client.post("/ingest", files={"file": ("projections-q3.csv", f)})
+    body = empty_client.get("/funds").json()
+    assert [f["source_file"] for f in body] == ["projections-q3.csv", "projections-q3.csv"]
+
+
+def test_source_file_names_the_file_that_minted_the_current_version(empty_client, sample_csv_path):
+    """A revision only restates Fund I, so Fund II keeps pointing at the file its
+    own version came from — source_file follows the version being served, not the
+    last upload to mention the fund."""
+    with open(sample_csv_path, "rb") as f:
+        empty_client.post("/ingest", files={"file": ("projections-q3.csv", f)})
+    with open(REV_FX_UPDATE, "rb") as f:
+        empty_client.post("/ingest", files={"file": ("fund-i-restated.csv", f)})
+
+    body = {f["name"]: f for f in empty_client.get("/funds").json()}
+    assert body["Fund I"]["source_file"] == "fund-i-restated.csv"
+    assert body["Fund I"]["version_no"] == 2
+    assert body["Fund II"]["source_file"] == "projections-q3.csv"
+    assert body["Fund II"]["version_no"] == 1
 
 
 def test_irr(client):

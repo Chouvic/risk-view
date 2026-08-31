@@ -472,6 +472,11 @@ class CashflowRepository:
 
         cashflow_count comes off the projection row and the currency list off the
         position schedules, so no fund's cashflows or analytics are rebuilt here.
+
+        source_file is the batch that minted the current version, not the last
+        batch to mention the fund: "which file produced these numbers?" is a
+        question about the version being served, and an upload that left the
+        fund unchanged produced nothing.
         """
         rows = self._session.execute(
             select(
@@ -481,9 +486,11 @@ class CashflowRepository:
                 ProjectionVersion.id,
                 ProjectionVersion.cashflow_count,
                 ProjectionVersion.version_no,
+                IngestionBatch.source_filename,
             )
             .join(FundCurrentVersion, FundCurrentVersion.fund_id == Fund.id)
             .join(ProjectionVersion, ProjectionVersion.id == FundCurrentVersion.version_id)
+            .join(IngestionBatch, IngestionBatch.id == ProjectionVersion.batch_id)
             .order_by(Fund.id)
         ).all()
         if not rows:
@@ -508,8 +515,17 @@ class CashflowRepository:
                 currencies=currencies[version_id],
                 cashflow_count=cashflow_count,
                 version_no=version_no,
+                source_file=source_filename,
             )
-            for fund_id, name, base_currency, version_id, cashflow_count, version_no in rows
+            for (
+                fund_id,
+                name,
+                base_currency,
+                version_id,
+                cashflow_count,
+                version_no,
+                source_filename,
+            ) in rows
         ]
 
     # ------------------------------------------------------------------

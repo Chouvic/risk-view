@@ -328,6 +328,10 @@ class FundSummary(BaseModel):
     currencies: list[str] = Field(description="Position currencies, including the base currency if held.")
     cashflow_count: int = Field(description="Validated cashflows currently stored for this fund.")
     version_no: int = Field(description="The projection version reads serve by default.")
+    source_file: str | None = Field(
+        default=None,
+        description="File the fund's current projection version was ingested from, if known.",
+    )
 
 
 class VersionInfo(BaseModel):
