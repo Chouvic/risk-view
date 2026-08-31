@@ -32,10 +32,17 @@ Derived — one schedule per (fund, currency) in local-currency terms, plus one 
 | fund_name | str | |
 | currency | ISO 4217 | position currency (base currency for the fund-level schedule) |
 | irr | float | the position's IRR, which is also the discount rate for every point |
-| points | | one per cashflow date, each holding: |
-| · date | date | |
-| · nav | decimal | PV of flows on or after the date, at the IRR; by construction NAV(0) = 0 and NAV at the final date equals the terminal value — the schedule's built-in sanity checks |
-| · open_exposure | decimal | PV of flows after the date — the amount a hedge must cover |
+| points | NAV point[] | one per cashflow date, chronological |
+
+Each **NAV point**:
+
+| Field | Type | Notes |
+|---|---|---|
+| date | date | a cashflow date for this position |
+| nav | decimal | PV of flows on or after the date, at the IRR |
+| open_exposure | decimal | PV of flows strictly after the date — the amount a hedge must cover |
+
+By construction NAV(0) = 0 and NAV at the final date equals the terminal value: the brief's two sanity checks, asserted in `tests/test_nav.py`.
 
 ### FX hedge trade
 
@@ -81,16 +88,25 @@ Data lives in memory today — the priority was the analytics, not persistence �
 ## Part 2 — Pipeline Design
 
 ```mermaid
-flowchart LR
-    A[Client file upload<br/>CSV / Excel] --> B[Ingestion<br/>read → validate against the model]
-    B -->|corrections & rejects| R[Ingestion report]
-    B -->|validated batch vN| C[(Store)]
-    C --> D[Analytics<br/>IRR → NAV → hedges]
-    D -->|results for vN| C
-    C --> E[Serving API]
-    E --> F[Client web app]
-    R --> G[Ops / data supplier]
+flowchart TD
+    APP["Client web app"] -->|"POST /ingest — CSV / Excel"| ING["Ingestion<br/>read → Cashflow.model_validate"]
+    ING --> OK{"every row valid?"}
+
+    OK -->|no| REJ[/"422 — every bad row,<br/>with line, id and reason"/]
+    REJ --> SUP["Data supplier fixes the file"]
+    SUP -.->|re-upload| ING
+
+    OK -->|yes| ST[("Store — batch vN")]
+    ST --> AN["Analytics<br/>IRR → NAV → hedges"]
+    AN -->|"results for vN"| ST
+    ST --> API["Serving API<br/>GET /funds/*"]
+    API -->|"200 JSON"| APP
+
+    classDef fail fill:#fde8e8,stroke:#c0392b,color:#7b241c
+    class REJ fail
 ```
+
+Nothing crosses the `OK` gate but a whole valid batch, so the store, the analytics and everything served are always a complete picture of one uploaded file.
 
 ### Trigger mechanism and step dependencies
 
@@ -115,6 +131,21 @@ Fix only what is unambiguous, and record every fix: stray characters, known date
 Anything not unambiguously fixable fails validation, and **a batch is all-or-nothing**. Every bad row is collected first, with Pydantic's reason and the offending value, and only then is the batch refused — so the supplier sees every problem in one pass rather than fixing the file one row per round trip. Nothing is stored and no analytics run.
 
 Partial acceptance was the alternative and is the wrong trade here. A fund's IRR and NAV schedule are computed from all of its cashflows, so dropping six bad rows out of 126 does not yield an incomplete answer — it yields a confident, plausible, wrong one, served to a client-facing app with no signal that anything is missing. Refusing the batch turns a silent data-quality problem into a loud one, at the cost of a re-send. A missing column and a repeated row id fail the file the same way, just earlier — the first before validation starts, the second as a validator on `IngestionResult`.
+
+### How failure is presented
+
+Every failure is caught at the boundary that can name it, and answered with the reason and the offending value — never a stack trace and never a partial result.
+
+| Failure | Caught | Response |
+|---|---|---|
+| Unsupported file type | reader | `422 unsupported file type 'pdf'; expected one of ['csv', 'xlsx']` |
+| Missing column | before validation | `422 input is missing expected columns: ['Date', ...]` |
+| Any row fails validation | per-row, all collected | `422 {error, rejects: [{line, row_id, errors}]}` — nothing stored |
+| Duplicate row id | `IngestionResult` validator | `422 duplicate cashflow ids in input: [17]` |
+| Unknown fund | serving | `404 unknown fund: 99` |
+| Fund holds no such currency | serving | `404 fund 1 has no JPY position` |
+
+The CLI presents the same failures on stderr and exits non-zero. Reads cannot fail on data quality, because unvalidated data never reaches the store.
 
 ### Idempotency
 
