@@ -11,6 +11,7 @@ Fund-level FX risk analytics for private credit funds: ingest projected cashflow
 | Part 3 — Implementation with tests | `src/riskview/` + `tests/` — run below |
 | Part 4 — Trade-offs | [docs/design.md](docs/design.md#part-4--trade-offs) |
 | Approach and assumptions | this README |
+| Walkthrough of all four parts | **Case study report** tab in the web UI (`/report`) |
 
 ## Quick start
 
@@ -34,10 +35,31 @@ In VS Code these are tasks (⇧⌘P → *Run Task*): **Serve API**, **Serve UI**
 
 ## Web UI
 
-`frontend/` is a React + TypeScript app (Vite, Tailwind, Recharts) over the same API. Three routes,
+`frontend/` is a React + TypeScript app (Vite, Tailwind, Recharts) over the same API. Four routes,
 each with its own URL: `/funds` lists the funds, `/funds/:id` is one fund top to bottom — overview,
-returns, NAV and hedges, scoped by a currency filter — and `/data` handles ingestion, since a file
-can carry several funds and a fund only names the file it came from.
+returns, NAV and hedges, scoped by a currency filter — `/data` handles ingestion, since a file can
+carry several funds and a fund only names the file it came from, and `/report` is the case study
+walkthrough.
+
+### Case study report
+
+The **Case study report** tab (`/report`) walks the design in the brief's own order: the problem,
+then Parts 1 to 4, then what is deliberately missing. Seven sections, each with live panels rather
+than screenshots — select an entity to see its schema, route a clean or defective batch through the
+pipeline, edit a row and watch the validators run, solve the IRR by bisection, move the valuation
+date through the NAV schedule, size the hedge programme at any coverage ratio, and replay a
+mid-quarter revision against a live hedge book.
+
+The page is static: it reads a dataset generated from the real pipeline instead of calling the API,
+so it presents identically with the backend down. Nothing on it is typed by hand — regenerate after
+any change to the analytics or the sample data:
+
+```bash
+uv run python scripts/build_report_data.py
+```
+
+On load the page re-derives every IRR and NAV point in the browser and compares them against the
+Python output; a stale dataset shows as a failed check rather than a quietly wrong number.
 
 Metric names carry a dotted underline: hovering one gives the definition and the convention behind
 it, from `src/lib/glossary.ts`. Tables sort on any column. A currency keeps its colour throughout, so

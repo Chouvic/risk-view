@@ -1,4 +1,4 @@
-import { Database, Layers, Upload } from "lucide-react";
+import { BookOpen, Database, Layers, Upload } from "lucide-react";
 import { NavLink, useNavigate } from "react-router-dom";
 import type { FundSummary } from "@/api/types";
 import { FUND_SECTIONS } from "@/lib/sections";
@@ -41,6 +41,7 @@ export function Sidebar({
         <div className="space-y-0.5">
           <PrimaryLink to="/funds" icon={Layers} label="Funds" />
           <PrimaryLink to="/data" icon={Database} label="Data" />
+          <PrimaryLink to="/report" icon={BookOpen} label="Case study report" />
         </div>
 
         {fund ? (
