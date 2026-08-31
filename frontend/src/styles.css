@@ -45,3 +45,18 @@ body {
 .recharts-surface:focus {
   outline: none;
 }
+
+/*
+ * The case study report is a document rather than a dashboard, so it reads a step
+ * larger than the rest of the app. Zoom scales the whole subtree — type, spacing and
+ * the SVG labels — instead of leaving a trail of one-off font sizes behind, and the
+ * width is divided back out so the scaled content still fits its container.
+ *
+ * Phones have no width to give away, so the scale starts once there is room.
+ */
+@media (min-width: 640px) {
+  .report-scale {
+    zoom: 1.2;
+    width: calc(100% / 1.2);
+  }
+}

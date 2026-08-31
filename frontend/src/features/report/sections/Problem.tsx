@@ -1,7 +1,7 @@
 import { formatPercent } from "@/lib/format";
 import { ReportSection } from "../ReportShell";
 import { DATA, FUND, HEADLINE, HEDGES, NON_BASE } from "../lib/model";
-import { Claim, Figure, Prose, Takeaway } from "../parts/ui";
+import { Claim, Figure, Prose } from "../parts/ui";
 
 /** Why the feature exists. */
 export function Problem() {
@@ -42,11 +42,6 @@ export function Problem() {
           />
         </div>
       </div>
-
-      <Takeaway>
-        Clients supply one thing: a dated schedule of amounts. IRR, NAV and every trade ticket are
-        functions of it — computed, never stored as input, and always rebuildable from it.
-      </Takeaway>
     </ReportSection>
   );
 }

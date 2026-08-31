@@ -17,7 +17,8 @@ import { Scope } from "@/features/report/sections/Scope";
  */
 export function ReportPage() {
   return (
-    <>
+    // `report-scale` sets the document's type a step above the dashboard's; see styles.css.
+    <div className="report-scale">
       <PageTitle
         title="Case study report"
         description="Fund-level risk analytics and hedge recommendations — the design, the data and the code, walked through in the order the brief asks for them."
@@ -31,6 +32,6 @@ export function ReportPage() {
         <Tradeoffs />
         <Scope />
       </ReportShell>
-    </>
+    </div>
   );
 }

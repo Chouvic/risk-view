@@ -176,15 +176,6 @@ export function Code({ children, label }: { children: string; label?: string }) 
   );
 }
 
-/** A conclusion worth separating from the argument that produced it. */
-export function Takeaway({ children }: { children: ReactNode }) {
-  return (
-    <div className="max-w-3xl rounded-lg border border-hairline border-l-2 border-l-ink bg-subtle px-4 py-3">
-      <p className="text-sm leading-relaxed text-ink">{children}</p>
-    </div>
-  );
-}
-
 /**
  * A section's core ideas: three at most, each a claim that stands alone with one line
  * of reasoning under it. The shape is the editorial rule — if an idea needs a paragraph,

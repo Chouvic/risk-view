@@ -13,7 +13,7 @@ export const OUTLINE: { id: string; step: string; label: string; title: string }
     id: "brief",
     step: "02",
     label: "Brief",
-    title: "What was asked, and where each answer lives",
+    title: "What the brief asks, and where I answered it",
   },
   {
     id: "schema",
