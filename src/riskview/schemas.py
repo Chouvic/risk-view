@@ -264,6 +264,9 @@ class FundSummary(BaseModel):
     base_currency: str
     currencies: list[str] = Field(description="Position currencies, including the base currency if held.")
     cashflow_count: int = Field(description="Validated cashflows currently stored for this fund.")
+    source_file: str | None = Field(
+        default=None, description="File the fund's current projections were ingested from, if known."
+    )
 
 
 class FundIrr(BaseModel):
