@@ -1,4 +1,4 @@
-import { ArrowLeftRight, LayoutDashboard, TrendingUp, Waves } from "lucide-react";
+import { ArrowLeftRight, History, LayoutDashboard, TrendingUp, Waves } from "lucide-react";
 import type { ComponentType } from "react";
 
 /** The bands of a fund's page. The sidebar links to them and the page renders them. */
@@ -36,5 +36,12 @@ export const FUND_SECTIONS: {
     icon: ArrowLeftRight,
     title: "FX hedges",
     description: "Rolling three-month forwards against each non-base currency's open exposure.",
+  },
+  {
+    id: "revisions",
+    label: "Revisions",
+    icon: History,
+    title: "Revisions",
+    description: "Every version of this fund's schedule, and what each revision changed.",
   },
 ];

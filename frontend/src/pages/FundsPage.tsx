@@ -14,7 +14,7 @@ import { sortRows } from "@/lib/sorting";
 import { formatPercent, pluralise } from "@/lib/format";
 import { currencyColor } from "@/lib/series";
 
-type Column = "name" | "base" | "irr" | "cashflows" | "source";
+type Column = "name" | "base" | "irr" | "cashflows" | "version" | "source";
 
 /** The landing page: every fund the API holds, with enough on each row to choose one. */
 export function FundsPage({ funds }: { funds: FundSummary[] }) {
@@ -37,6 +37,8 @@ export function FundsPage({ funds }: { funds: FundSummary[] }) {
         return irrByFund.get(fund.fund_id) ?? -Infinity;
       case "cashflows":
         return fund.cashflow_count;
+      case "version":
+        return fund.version_no;
       case "source":
         return fund.source_file ?? "";
     }
@@ -77,6 +79,9 @@ export function FundsPage({ funds }: { funds: FundSummary[] }) {
                 </SortTh>
                 <SortTh column="cashflows" sort={sort} onSort={toggle} metric="cashflows" numeric>
                   Cashflows
+                </SortTh>
+                <SortTh column="version" sort={sort} onSort={toggle} metric="projectionVersion" numeric>
+                  Version
                 </SortTh>
                 <SortTh column="source" sort={sort} onSort={toggle}>
                   Source file
@@ -126,6 +131,7 @@ export function FundsPage({ funds }: { funds: FundSummary[] }) {
                     </Td>
                     <Td numeric>{irr === undefined ? "—" : formatPercent(irr)}</Td>
                     <Td numeric>{fund.cashflow_count.toLocaleString("en-GB")}</Td>
+                    <Td numeric>v{fund.version_no}</Td>
                     <Td>
                       {fund.source_file ? (
                         <span className="inline-flex max-w-[200px] items-center gap-1.5">
@@ -148,8 +154,8 @@ export function FundsPage({ funds }: { funds: FundSummary[] }) {
           </Table>
 
           <p className="px-5 py-3 text-sm text-ink-3">
-            {pluralise(funds.length, "fund")}. An upload replaces the projections of every fund in
-            the file.
+            {pluralise(funds.length, "fund")}. An upload restates every fund in the file; one whose
+            schedule is unchanged keeps the version it is on.
           </p>
         </Card>
       </div>

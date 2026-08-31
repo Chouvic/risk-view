@@ -8,6 +8,8 @@ import type {
   IngestionReport,
   NavBundle,
   RowReject,
+  VersionDiff,
+  VersionInfo,
 } from "./types";
 
 const BASE = "/api";
@@ -59,17 +61,40 @@ export function fetchFundIrrs(funds: FundSummary[], signal?: AbortSignal): Promi
   return Promise.all(funds.map((fund) => get<FundIrr>(`/funds/${fund.fund_id}/irr`, signal)));
 }
 
-/** One fund's whole analytics set. The three reads are independent, so they run together. */
+/**
+ * One fund's whole analytics set. The three reads are independent, so they run
+ * together — and they take the same `?version=`, so all three describe one
+ * version of the projection rather than a mix of two.
+ */
 export async function fetchFundAnalytics(
   summary: FundSummary,
+  version?: number,
   signal?: AbortSignal,
 ): Promise<FundAnalytics> {
+  const at = version === undefined ? "" : `?version=${version}`;
   const [irr, nav, hedges] = await Promise.all([
-    get<FundIrr>(`/funds/${summary.fund_id}/irr`, signal),
-    get<NavBundle>(`/funds/${summary.fund_id}/nav`, signal),
-    get<FxForwardTrade[]>(`/funds/${summary.fund_id}/hedges`, signal),
+    get<FundIrr>(`/funds/${summary.fund_id}/irr${at}`, signal),
+    get<NavBundle>(`/funds/${summary.fund_id}/nav${at}`, signal),
+    get<FxForwardTrade[]>(`/funds/${summary.fund_id}/hedges${at}`, signal),
   ]);
-  return { summary, irr, nav, hedges };
+  return { summary, version_no: version ?? summary.version_no, irr, nav, hedges };
+}
+
+/** A fund's projection history, oldest first. One entry per version ever published. */
+export function fetchVersions(fundId: number, signal?: AbortSignal): Promise<VersionInfo[]> {
+  return get<VersionInfo[]>(`/funds/${fundId}/versions`, signal);
+}
+
+/** What changed between two versions. `to` defaults server-side to the current version. */
+export function fetchVersionDiff(
+  fundId: number,
+  from: number,
+  to?: number,
+  signal?: AbortSignal,
+): Promise<VersionDiff> {
+  const params = new URLSearchParams({ from_version: String(from) });
+  if (to !== undefined) params.set("to_version", String(to));
+  return get<VersionDiff>(`/funds/${fundId}/versions/diff?${params}`, signal);
 }
 
 export async function uploadCashflows(file: File): Promise<IngestionReport> {

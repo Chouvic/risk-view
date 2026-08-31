@@ -98,6 +98,20 @@ export const GLOSSARY = {
     term: "Cashflows",
     definition: "Validated projected cashflow rows currently held for this fund.",
   },
+  projectionVersion: {
+    term: "Projection version",
+    definition:
+      "An immutable snapshot of one fund's whole schedule, with the IRR, NAV and hedges computed from it.",
+    method:
+      "Published by moving the fund's pointer last, so a read sees one version whole or the one before it.",
+  },
+  revision: {
+    term: "Revision",
+    definition:
+      "A re-upload that restates a fund's schedule and differs from the version on record, minting version N+1.",
+    method:
+      "Detected by content, not bytes: reordered rows, renumbered ids or a CSV-to-Excel re-export mint nothing.",
+  },
 } as const satisfies Record<string, GlossaryEntry>;
 
 export type GlossaryKey = keyof typeof GLOSSARY;

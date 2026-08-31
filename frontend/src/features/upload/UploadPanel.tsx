@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { AlertTriangle, CheckCircle2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Copy } from "lucide-react";
 import { ApiError, uploadCashflows } from "@/api/client";
 import type { IngestionReport, RowReject } from "@/api/types";
 import { Dropzone } from "./Dropzone";
+import { FundOutcomes } from "./FundOutcomes";
 
 interface Failure {
   message: string;
@@ -48,18 +49,40 @@ export function UploadPanel({
       <Dropzone onFile={handleFile} busy={busy} fileName={fileName} />
 
       {accepted ? (
-        <div className="flex items-start gap-2.5 rounded-xl border border-hairline bg-subtle px-4 py-3">
-          <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-good" />
-          <p className="text-sm leading-relaxed text-ink-2">
-            <span className="font-semibold text-ink">{accepted.summary.accepted}</span> rows accepted
-            from {fileName}
-            {accepted.summary.corrected > 0 ? (
-              <>
-                , <span className="font-semibold text-ink">{accepted.summary.corrected}</span> corrected
-              </>
-            ) : null}
-            . Full record below.
-          </p>
+        <div className="rounded-xl border border-hairline bg-subtle">
+          <div className="flex items-start gap-2.5 px-4 py-3">
+            {accepted.duplicate ? (
+              <Copy size={16} className="mt-0.5 shrink-0 text-ink-3" />
+            ) : (
+              <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-good" />
+            )}
+            <p className="text-sm leading-relaxed text-ink-2">
+              {accepted.duplicate ? (
+                <>
+                  These exact bytes were already ingested as batch{" "}
+                  <span className="font-semibold text-ink">#{accepted.batch_id}</span>. Nothing was
+                  parsed or stored — this is the original report.
+                </>
+              ) : (
+                <>
+                  <span className="font-semibold text-ink">{accepted.summary.accepted}</span> rows
+                  accepted from {fileName}
+                  {accepted.summary.corrected > 0 ? (
+                    <>
+                      , <span className="font-semibold text-ink">{accepted.summary.corrected}</span>{" "}
+                      corrected
+                    </>
+                  ) : null}
+                  . Full record below.
+                </>
+              )}
+            </p>
+          </div>
+          {accepted.funds.length > 0 ? (
+            <div className="border-t border-hairline">
+              <FundOutcomes funds={accepted.funds} />
+            </div>
+          ) : null}
         </div>
       ) : null}
 

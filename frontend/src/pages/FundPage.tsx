@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { AlertTriangle, Loader2 } from "lucide-react";
-import type { FundAnalytics, FundSummary } from "@/api/types";
+import type { FundAnalytics, FundSummary, VersionInfo } from "@/api/types";
 import { useFundAnalytics } from "@/hooks/useFundAnalytics";
+import { useFundVersions } from "@/hooks/useFundVersions";
 import { useActiveSection } from "@/hooks/useActiveSection";
 import { FUND_SECTIONS } from "@/lib/sections";
 import { ALL_CURRENCIES } from "@/lib/scope";
@@ -14,6 +15,7 @@ import { StatStrip } from "@/features/overview/StatStrip";
 import { ReturnsSection } from "@/features/returns/ReturnsSection";
 import { NavSection } from "@/features/nav/NavSection";
 import { HedgeSection } from "@/features/hedges/HedgeSection";
+import { RevisionsSection } from "@/features/versions/RevisionsSection";
 
 const SECTION_IDS = FUND_SECTIONS.map((section) => section.id);
 
@@ -26,7 +28,19 @@ export function FundPage({
   /** Reported upward so the sidebar can mark where the reader is. */
   onActiveSectionChange: (id: string) => void;
 }) {
-  const analytics = useFundAnalytics(fund);
+  // undefined means "whatever the API serves by default" — the fund's current
+  // version — so a fresh page never pins itself to a version that is about to move.
+  const [pinned, setPinned] = useState<number>();
+  const analytics = useFundAnalytics(fund, pinned);
+  const versions = useFundVersions(fund.fund_id);
+  const viewing = pinned ?? fund.version_no;
+  const viewedVersion = versions.data?.find((version) => version.version_no === viewing);
+  // Choosing the current version un-pins rather than pinning to its number, so the
+  // page follows the fund forward if a revision lands while it is open.
+  const viewVersion = useCallback(
+    (version: number) => setPinned(version === fund.version_no ? undefined : version),
+    [fund.version_no],
+  );
   const [scope, setScope] = useState<string>(ALL_CURRENCIES);
   // A currency the fund does not hold falls back to All.
   const activeScope =
@@ -51,7 +65,16 @@ export function FundPage({
 
   return (
     <>
-      <FundHeader fund={fund} horizon={horizon} scope={activeScope} onScopeChange={setScope} />
+      <FundHeader
+        fund={fund}
+        horizon={horizon}
+        scope={activeScope}
+        onScopeChange={setScope}
+        versions={versions.data ?? []}
+        viewing={viewing}
+        viewedVersion={viewedVersion}
+        onViewVersion={viewVersion}
+      />
 
       {analytics.error ? (
         <div className="flex items-center gap-2 px-6 py-10 text-[15px] text-critical">
@@ -67,7 +90,16 @@ export function FundPage({
         <div className={cn("transition-opacity", analytics.refreshing && "opacity-50")}>
           {FUND_SECTIONS.map(({ id, title, description }) => (
             <Section key={id} id={id} title={title} description={description}>
-              <SectionBody id={id} analytics={data} scope={activeScope} onScopeChange={setScope} />
+              <SectionBody
+                id={id}
+                analytics={data}
+                scope={activeScope}
+                onScopeChange={setScope}
+                fund={fund}
+                versions={versions.data ?? []}
+                viewing={viewing}
+                onViewVersion={viewVersion}
+              />
             </Section>
           ))}
         </div>
@@ -81,11 +113,19 @@ function SectionBody({
   analytics,
   scope,
   onScopeChange,
+  fund,
+  versions,
+  viewing,
+  onViewVersion,
 }: {
   id: string;
   analytics: FundAnalytics;
   scope: string;
   onScopeChange: (scope: string) => void;
+  fund: FundSummary;
+  versions: VersionInfo[];
+  viewing: number;
+  onViewVersion: (version: number) => void;
 }) {
   switch (id) {
     case "overview":
@@ -96,6 +136,15 @@ function SectionBody({
       return <NavSection analytics={analytics} scope={scope} onScopeChange={onScopeChange} />;
     case "hedges":
       return <HedgeSection analytics={analytics} scope={scope} />;
+    case "revisions":
+      return (
+        <RevisionsSection
+          fund={fund}
+          versions={versions}
+          viewing={viewing}
+          onView={onViewVersion}
+        />
+      );
     default:
       return null;
   }
