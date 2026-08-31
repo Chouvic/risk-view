@@ -10,6 +10,7 @@ import { Sidebar } from "@/features/shell/Sidebar";
 import { FundsPage } from "@/pages/FundsPage";
 import { FundPage } from "@/pages/FundPage";
 import { DataPage } from "@/pages/DataPage";
+import { ReportPage } from "@/pages/ReportPage";
 
 export default function App() {
   const funds = useFunds();
@@ -18,12 +19,16 @@ export default function App() {
   const location = useLocation();
   const list = funds.data ?? [];
 
+  // The case study report is static: it reads a generated dataset rather than the API,
+  // so it stays reachable while the funds request is loading, failing or empty.
+  const staticRoute = location.pathname.startsWith("/report");
+
   function handleIngested(report: IngestionReport, fileName: string) {
     setUploads((current) => [newUploadRecord(fileName, report), ...current]);
     funds.reload();
   }
 
-  if (funds.loading) {
+  if (funds.loading && !staticRoute) {
     return (
       <FullPage>
         <Loader2 className="animate-spin text-ink-3" />
@@ -31,7 +36,7 @@ export default function App() {
     );
   }
 
-  if (funds.error) {
+  if (funds.error && !staticRoute) {
     return (
       <FullPage>
         <div className="max-w-sm text-center">
@@ -47,7 +52,7 @@ export default function App() {
   }
 
   // Nothing stored and nothing sent: the only useful screen is the one that ingests a file.
-  if (list.length === 0 && uploads.length === 0) {
+  if (list.length === 0 && uploads.length === 0 && !staticRoute) {
     return <EmptyState onIngested={handleIngested} />;
   }
 
@@ -69,6 +74,7 @@ export default function App() {
             element={<FundRoute funds={list} onActiveSectionChange={setActiveSection} />}
           />
           <Route path="/data" element={<DataPage uploads={uploads} onIngested={handleIngested} />} />
+          <Route path="/report" element={<ReportPage />} />
           <Route path="*" element={<Navigate to="/funds" replace />} />
         </Routes>
       </main>
